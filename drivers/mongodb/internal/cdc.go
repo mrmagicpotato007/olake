@@ -19,6 +19,7 @@ type CDCDocument struct {
 	OperationType string         `json:"operationType"`
 	FullDocument  map[string]any `json:"fullDocument"`
 	DocumentKey   map[string]any `json:"documentKey"` // for delete operations
+	Timestamp     time.Time      `json:"timestamp"`   // Add timestamp field
 }
 
 func (m *Mongo) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
@@ -89,12 +90,14 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		// TODO: Handle Deleted documents (Good First Issue)
 		//handle delete,update,insert operation
 		if record.OperationType == "delete" && record.FullDocument == nil {
+			deletionTime := record.Timestamp
+
 			if id, ok := record.DocumentKey["_id"]; ok {
 				logger.Infof("Delete operation detected. Document ID: %v", id)
 				deleteDocument := map[string]any{
-					"cdc_type":   record.OperationType,
-					"deleted_at": time.Now().Format(time.RFC3339),
-					"_id":        id,
+					"cdc_type":       record.OperationType,
+					"cdc_deleted_at": deletionTime,
+					"_id":            id,
 				}
 				exit, err := insert.Insert(types.Record(deleteDocument))
 				if err != nil {

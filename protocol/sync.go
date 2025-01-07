@@ -3,6 +3,8 @@ package protocol
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +67,42 @@ var syncCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		//start monitoring for stats in go routine
+		go func() {
+
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-cmd.Context().Done():
+					fmt.Println("Monitoring stopped")
+					return
+				case <-ticker.C:
+					file, err := os.OpenFile("/Users/datazip/Desktop/olake-1/drivers/mongodb/examples/stats.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+					if err != nil {
+						fmt.Printf("failed to open stats file:%v\n", err)
+					}
+					defer file.Close()
+					syncedRecords := pool.recordCount.Load()
+					runningThreads := pool.threadCounter.Load()
+					memStats := new(runtime.MemStats)
+					runtime.ReadMemStats(memStats)
+
+					stats := fmt.Sprintf(
+						"Synced Records: %d\nRunning Threads: %d\nMemory Alloc: %d KB\nTotal Memory Alloc: %d KB\nHeap In Use: %d KB\n\n",
+						syncedRecords, runningThreads, memStats.Alloc/1024, memStats.TotalAlloc/1024, memStats.HeapInuse/1024,
+					)
+
+					if _, err := file.WriteString(stats); err != nil {
+						fmt.Printf("Failed to write to stats file: %v\n", err)
+						return
+					}
+
+				}
+			}
+
+		}()
+
 		// setup conector first
 		err = connector.Setup()
 		if err != nil {

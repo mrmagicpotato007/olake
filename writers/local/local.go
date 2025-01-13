@@ -192,7 +192,10 @@ func (l *Local) EvolveSchema(mutation map[string]*types.Property) error {
 	l.pqSchemaMutex.Lock()
 	defer l.pqSchemaMutex.Unlock()
 
-	l.writer.SetSchemaDefinition(l.stream.Schema().ToParquet())
+	// Attempt to set the schema definition
+	if err := l.writer.SetSchemaDefinition(l.stream.Schema().ToParquet()); err != nil {
+		return fmt.Errorf("failed to set schema definition: %w", err)
+	}
 	return nil
 }
 

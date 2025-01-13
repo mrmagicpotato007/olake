@@ -1,6 +1,8 @@
 package local
 
-import "github.com/piyushsingariya/relec"
+import (
+	"github.com/datazip-inc/olake/utils"
+)
 
 type Config struct {
 	// Local file path (for local file system usage)
@@ -13,5 +15,5 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
-	return relec.Validate(c)
+	return utils.Validate(c)
 }

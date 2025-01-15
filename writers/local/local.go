@@ -1,4 +1,3 @@
-// local_writer.go
 package local
 
 import (
@@ -104,7 +103,7 @@ func (l *Local) Setup(stream protocol.Stream, options *protocol.Options) error {
 }
 
 // Write writes a record to the Parquet file.
-func (l *Local) Write(ctx context.Context, record types.Record) error {
+func (l *Local) Write(_ context.Context, record types.Record) error {
 	// Lock for thread safety and write the record
 	l.pqSchemaMutex.Lock()
 	defer l.pqSchemaMutex.Unlock()
@@ -151,6 +150,7 @@ func (l *Local) Check() error {
 
 	return nil
 }
+
 func (l *Local) Close() error {
 	if l.closed {
 		return nil
@@ -188,7 +188,7 @@ func (l *Local) Close() error {
 }
 
 // EvolveSchema updates the schema based on changes.
-func (l *Local) EvolveSchema(mutation map[string]*types.Property) error {
+func (l *Local) EvolveSchema(_ map[string]*types.Property) error {
 	l.pqSchemaMutex.Lock()
 	defer l.pqSchemaMutex.Unlock()
 

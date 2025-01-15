@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-// CreateFile creates a file with the specified filename, path, extension, and writes the given data.
+// CreateFile creates a new file or overwrites an existing one with the specified filename, path, extension,
 func CreateFile(filePath, fileName, fileExtension string, data []byte) error {
 	// Construct the full file path
 	fullPath := filepath.Join(filePath, fileName+fileExtension)

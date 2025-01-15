@@ -86,10 +86,13 @@ var syncCmd = &cobra.Command{
 						syncedRecords, runningThreads, memStats.Alloc/1024, memStats.TotalAlloc/1024, memStats.HeapInuse/1024,
 					)
 					data := []byte(stats)
-					filePath := "/Users/datazip/Desktop/olake-1/drivers/mongodb/examples"
-					fileName := "stats"
-					fileExtension := ".log"
-					if err := utils.CreateFile(filePath, fileName, fileExtension, data); err != nil {
+
+					dir, err := utils.ExtractDirFromPath(configPath)
+					if err != nil {
+						fmt.Printf("Failed to extract directory: %v\n", err)
+						return
+					}
+					if err := utils.CreateFile(dir, "stats", ".log", data); err != nil {
 						fmt.Printf("Failed to write to stats file: %v\n", err)
 						return
 					}

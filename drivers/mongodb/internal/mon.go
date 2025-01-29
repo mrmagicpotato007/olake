@@ -14,7 +14,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 const (
@@ -22,16 +21,10 @@ const (
 	cdcCursorField = "_data"
 )
 
-type mongoInterface interface {
-	Ping(ctx context.Context, rp *readpref.ReadPref) error
-	Disconnect(ctx context.Context) error
-	Database(name string, opts ...*options.DatabaseOptions) *mongo.Database
-}
-
 type Mongo struct {
 	*base.Driver
 	config *Config
-	client mongoInterface
+	client *mongo.Client
 }
 
 // config reference; must be pointer

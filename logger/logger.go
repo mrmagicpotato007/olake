@@ -79,7 +79,7 @@ func LogSpec(spec map[string]interface{}) {
 
 	Info("logging spec")
 	Info(message)
-	if configFolder := viper.GetString("configFolder"); configFolder != "" {
+	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(message.Spec, configFolder, "config", ".json")
 		if err != nil {
 			Fatalf("failed to create catalog file: %v", err)

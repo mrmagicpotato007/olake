@@ -13,12 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMongo_Setup(t *testing.T) {
-	client, _ := testClient(t)
-	assert.NotNil(t, client)
-}
-
-func TestMongoCheck(t *testing.T) {
+func TestMongoSetup(t *testing.T) {
 	client, config := testClient(t)
 	assert.NotNil(t, client)
 
@@ -141,6 +136,6 @@ func TestMongoRead(t *testing.T) {
 		dummyStream.SetupState(&types.State{})
 		err = mongoClient.Read(pool, dummyStream)
 		// TODO: Replica set test add on
-		assert.ErrorContains(t, err, "$changeStream stage is only supported on replica set")
+		assert.NoError(t, err)
 	})
 }

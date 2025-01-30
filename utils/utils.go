@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/oklog/ulid"
+	"github.com/sirupsen/logrus"
 
 	"github.com/spf13/cobra"
 )
@@ -201,7 +202,7 @@ func genULID(t time.Time) string {
 
 	newUlid, err := ulid.New(ulid.Timestamp(t), entropy)
 	if err != nil {
-		return err.Error()
+		logrus.Fatal(err)
 	}
 
 	return newUlid.String()

@@ -16,11 +16,13 @@ import (
 func testClient(t *testing.T) (*mongo.Client, Config) {
 	t.Helper()
 	config := Config{
-		Hosts:    []string{"localhost:27017"},
-		Username: "olake",
-		Password: "olake",
-		Database: "olake",
-		AuthDB:   "admin",
+		Hosts:      []string{"localhost:27017"},
+		Username:   "olake",
+		Password:   "olake",
+		Database:   "olake",
+		AuthDB:     "admin",
+		ReplicaSet: "rs0",
+		Srv:        false,
 	}
 
 	d := &Mongo{

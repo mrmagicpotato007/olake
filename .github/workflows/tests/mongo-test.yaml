@@ -1,0 +1,46 @@
+name: MongoDB Replica Set Unit Tests
+
+on: [push, pull_request]
+
+jobs:
+  mongo-test:
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+        options: >-
+          --replSet rs0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: olake
+          MONGO_INITDB_ROOT_PASSWORD: olake
+        # Wait for MongoDB to be ready
+        options: >-
+          --replSet rs0
+        # Initialize the replica set
+        run: |
+          sleep 10
+          mongo --host localhost:27017 <<EOF
+          rs.initiate({
+            _id: "rs0",
+            members: [
+              { _id: 0, host: "localhost:27017" },
+              { _id: 1, host: "localhost:27018" },
+              { _id: 2, host: "localhost:27019" }
+            ]
+          });
+          EOF
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: '1.17' # Specify your Go version
+
+      - name: Run tests
+        run: |
+          go test -v ./drivers/mongodb/internal

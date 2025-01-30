@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/datazip-inc/olake/logger"
-	"github.com/datazip-inc/olake/logger/console"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
 	"github.com/spf13/cobra"
@@ -50,7 +49,7 @@ var RootCmd = &cobra.Command{
 
 		// set global variables
 		if !noSave {
-			viper.Set("configFolder", filepath.Dir(configPath))
+			viper.Set("CONFIG_FOLDER", filepath.Dir(configPath))
 		}
 
 		return nil
@@ -79,7 +78,5 @@ func init() {
 	if err := RootCmd.Execute(); err != nil {
 		logger.Fatal(err)
 	}
-
-	console.SetupWriter(RootCmd.OutOrStdout(), RootCmd.ErrOrStderr())
 	logger.Init()
 }

@@ -3,13 +3,11 @@ package logger
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"os"
 	"path/filepath"
 
-	"github.com/datazip-inc/olake/logger/console"
 	"github.com/datazip-inc/olake/types"
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
@@ -18,30 +16,13 @@ import (
 
 var logger zerolog.Logger
 
-func InitializeLogger(logFilePath string) zerolog.Logger {
-	// Configure lumberjack for log rotation
-	rotatingFile := &lumberjack.Logger{
-		Filename:   logFilePath,
-		MaxSize:    10,
-		MaxBackups: 5,
-		MaxAge:     30,
-		Compress:   true,
-	}
-	// Create a multiwriter to log both console and file
-	multiwriter := zerolog.MultiLevelWriter(os.Stdout, rotatingFile)
-
-	logger := zerolog.New(multiwriter).With().Timestamp().Logger()
-
-	return logger
-}
-
-func Init() {
-	logger = InitializeLogger(fmt.Sprintf("%s/logs/olake.log", viper.GetString("configFolder")))
-}
-
 // Info writes record into os.stdout with log level INFO
 func Info(v ...interface{}) {
-	logger.Info().Msgf("%v", v...)
+	if len(v) == 1 {
+		logger.Info().Interface("message", v[0]).Send()
+	} else {
+		logger.Info().Msgf("%v", v...)
+	}
 }
 
 // Info writes record into os.stdout with log level INFO
@@ -97,9 +78,12 @@ func LogSpec(spec map[string]interface{}) {
 	message.Type = types.SpecMessage
 
 	Info("logging spec")
-	err := console.Print(console.INFO, message)
-	if err != nil {
-		Fatalf("failed to encode spec %v: %s", spec, err)
+	Info(message)
+	if configFolder := viper.GetString("configFolder"); configFolder != "" {
+		err := FileLogger(message.Spec, configFolder, "config", ".json")
+		if err != nil {
+			Fatalf("failed to create catalog file: %v", err)
+		}
 	}
 }
 
@@ -108,14 +92,11 @@ func LogCatalog(streams []*types.Stream) {
 	message.Type = types.CatalogMessage
 	message.Catalog = types.GetWrappedCatalog(streams)
 	Info("logging catalog")
-	err := console.Print(console.INFO, message)
-	if err != nil {
-		Fatalf("failed to encode catalog %v: %s", streams, err)
-	}
 
+	Info(message)
 	// write catalog to the specified file
-	if configFolder := viper.GetString("configFolder"); configFolder != "" {
-		err = logFile(message.Catalog, configFolder, "catalog", ".json")
+	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
+		err := FileLogger(message.Catalog, configFolder, "catalog", ".json")
 		if err != nil {
 			Fatalf("failed to create catalog file: %v", err)
 		}
@@ -131,17 +112,13 @@ func LogConnectionStatus(err error) {
 	} else {
 		message.ConnectionStatus.Status = types.ConnectionSucceed
 	}
-
-	err = console.Print(console.INFO, message)
-	if err != nil {
-		Fatalf("failed to encode connection status: %s", err)
-	}
+	Info(message)
 }
 
 func LogResponse(response *http.Response) {
 	respDump, err := httputil.DumpResponse(response, true)
 	if err != nil {
-		log.Fatal(err)
+		Fatal(err)
 	}
 
 	fmt.Println(string(respDump))
@@ -150,7 +127,7 @@ func LogResponse(response *http.Response) {
 func LogRequest(req *http.Request) {
 	requestDump, err := httputil.DumpRequest(req, true)
 	if err != nil {
-		log.Fatal(err)
+		Fatal(err)
 	}
 
 	fmt.Println(string(requestDump))
@@ -163,13 +140,9 @@ func LogState(state *types.State) {
 	message := types.Message{}
 	message.Type = types.StateMessage
 	message.State = state
-
-	err := console.Print(console.INFO, message)
-	if err != nil {
-		Fatalf("failed to encode connection status: %s", err)
-	}
-	if configFolder := viper.GetString("configFolder"); configFolder != "" {
-		err = logFile(state, configFolder, "state", ".json")
+	Info(message)
+	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
+		err := FileLogger(state, configFolder, "state", ".json")
 		if err != nil {
 			Fatalf("failed to create state file: %v", err)
 		}
@@ -177,7 +150,7 @@ func LogState(state *types.State) {
 }
 
 // CreateFile creates a new file or overwrites an existing one with the specified filename, path, extension,
-func logFile(content any, filePath string, fileName, fileExtension string) error {
+func FileLogger(content any, filePath string, fileName, fileExtension string) error {
 	// Construct the full file path
 	contentBytes, err := json.Marshal(content)
 	if err != nil {
@@ -200,4 +173,19 @@ func logFile(content any, filePath string, fileName, fileExtension string) error
 	}
 
 	return nil
+}
+func Init() {
+	// Configure lumberjack for log rotation
+	rotatingFile := &lumberjack.Logger{
+		Filename:   fmt.Sprintf("%s/logs/olake.log", viper.GetString("CONFIG_FOLDER")),
+		MaxSize:    10,
+		MaxBackups: 5,
+		MaxAge:     30,
+		Compress:   true,
+	}
+	// Create a multiwriter to log both console and file
+
+	multiwriter := zerolog.MultiLevelWriter(os.Stdout, rotatingFile)
+
+	logger = zerolog.New(multiwriter).With().Timestamp().Logger()
 }

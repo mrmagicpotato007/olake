@@ -7,6 +7,8 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/datazip-inc/olake/types"
 	"github.com/rs/zerolog"
@@ -174,6 +176,16 @@ func FileLogger(content any, filePath string, fileName, fileExtension string) er
 
 	return nil
 }
+
+// LogColors defines ANSI color codes for log levels
+var logColors = map[string]string{
+	"debug": "\033[36m", // Cyan
+	"info":  "\033[32m", // Green
+	"warn":  "\033[33m", // Yellow
+	"error": "\033[31m", // Red
+	"fatal": "\033[35m", // Magenta
+}
+
 func Init() {
 	// Configure lumberjack for log rotation
 	rotatingFile := &lumberjack.Logger{
@@ -183,9 +195,37 @@ func Init() {
 		MaxAge:     30,
 		Compress:   true,
 	}
-	// Create a multiwriter to log both console and file
 
-	multiwriter := zerolog.MultiLevelWriter(os.Stdout, rotatingFile)
+	// Create console writer
+	console := zerolog.ConsoleWriter{
+		Out: os.Stdout,
+		FormatLevel: func(i interface{}) string {
+			level := i.(string)
+			color := logColors[level]
+			return color + strings.ToUpper(level) + "\033[0m"
+		},
+		FormatMessage: func(i interface{}) string {
+			switch v := i.(type) {
+			case string:
+				return v
+			default:
+				msg, err := json.Marshal(v)
+				if err != nil {
+					return fmt.Sprintf("error marshaling message: %v", err)
+				}
+				return string(msg)
+			}
+		},
+		FormatTimestamp: func(i interface{}) string {
+			return "\033[90m" + fmt.Sprint(i) + "\033[0m"
+		},
+	}
+	zerolog.TimestampFunc = func() time.Time {
+		return time.Now().UTC()
+	}
+
+	// Create a multiwriter to log both console and file
+	multiwriter := zerolog.MultiLevelWriter(console, rotatingFile)
 
 	logger = zerolog.New(multiwriter).With().Timestamp().Logger()
 }

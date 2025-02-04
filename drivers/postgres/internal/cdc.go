@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -8,8 +9,8 @@ import (
 	"github.com/datazip-inc/olake/pkg/jdbc"
 	"github.com/datazip-inc/olake/pkg/waljs"
 	"github.com/datazip-inc/olake/protocol"
-	"github.com/datazip-inc/olake/safego"
 	"github.com/datazip-inc/olake/types"
+	"github.com/datazip-inc/olake/utils"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -28,7 +29,7 @@ func (p *Postgres) prepareWALJSConfig(streams ...protocol.Stream) (*waljs.Config
 	}
 
 	for _, stream := range streams {
-		if stream.GetState() == nil {
+		if stream.Self().GetStateCursor() == nil {
 			config.FullSyncTables.Insert(stream)
 		}
 
@@ -55,7 +56,8 @@ func (p *Postgres) SetupGlobalState(state *types.State) error {
 }
 
 // Write Ahead Log Sync
-func (p *Postgres) RunChangeStream(channel chan<- types.Record, streams ...protocol.Stream) error {
+func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
+	cdcCtx := context.TODO()
 	config, err := p.prepareWALJSConfig(streams...)
 	if err != nil {
 		return err
@@ -64,6 +66,15 @@ func (p *Postgres) RunChangeStream(channel chan<- types.Record, streams ...proto
 	socket, err := waljs.NewConnection(p.client, config)
 	if err != nil {
 		return err
+	}
+	insertionMap := make(map[protocol.Stream]protocol.InsertFunction)
+	for _, stream := range streams {
+		insert, err := pool.NewThread(cdcCtx, stream)
+		if err != nil {
+			return err
+		}
+		defer insert.Close()
+		insertionMap[stream] = insert.Insert
 	}
 
 	return socket.OnMessage(func(message waljs.WalJSChange) (bool, error) {
@@ -77,16 +88,20 @@ func (p *Postgres) RunChangeStream(channel chan<- types.Record, streams ...proto
 			message.Data[jdbc.CDCLSN] = message.LSN
 		}
 
+		// get olake_key_id
+		olakeID := utils.GetKeysHash(message.Data, message.Stream.GetStream().SourceDefinedPrimaryKey.Array()...)
+
 		// insert record
-		if !safego.Insert(channel, base.ReformatRecord(message.Stream, message.Data)) {
-			// channel was closed; exit OnMessage
-			return true, nil
+		rawRecord := types.CreateRawRecord(olakeID, message.Data, message.Timestamp)
+		exit, err := insertionMap[message.Stream](rawRecord)
+		if err != nil {
+			return false, err
+		}
+		if exit {
+			return false, nil
 		}
 
-		err = p.UpdateState(message.Stream, message.Data)
-		if err != nil {
-			return true, err
-		}
+		// TODO: State Management
 
 		return false, nil
 	})

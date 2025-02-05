@@ -261,7 +261,7 @@ func (s *Socket) streamMessagesAsync() {
 func (s *Socket) start() {
 	for _, stream := range s.Config.FullSyncTables.Array() {
 		err := func() error {
-			snapshotter := NewSnapshotter(stream, int(stream.BatchSize()))
+			snapshotter := NewSnapshotter(stream, s.Config.BatchSize)
 			if err := snapshotter.Prepare(s.pgxConn); err != nil {
 				return fmt.Errorf("failed to prepare database snapshot: %s", err)
 			}
@@ -272,7 +272,7 @@ func (s *Socket) start() {
 			}()
 
 			logger.Infof("Processing database snapshot: %s", stream.ID())
-			logger.Info("Query snapshot", "batch-size", stream.BatchSize())
+			logger.Info("Query snapshot", "batch-size", s.Config.BatchSize)
 
 			intialState := stream.InitialState()
 			args := []any{}
@@ -283,7 +283,7 @@ func (s *Socket) start() {
 				args = append(args, intialState)
 			}
 
-			setter := jdbc.NewReader(context.TODO(), statement, int(stream.BatchSize()), snapshotter.tx.Query, args...)
+			setter := jdbc.NewReader(context.TODO(), statement, s.Config.BatchSize, snapshotter.tx.Query, args...)
 			return setter.Capture(func(rows pgx.Rows) error {
 				values, err := rows.Values()
 				if err != nil {

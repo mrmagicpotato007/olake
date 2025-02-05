@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
 	"github.com/lib/pq"
 )
@@ -65,6 +66,20 @@ type Config struct {
 	// oneOf=["Standard","CDC"]
 	// )
 	UpdateMethod interface{} `json:"update_method"`
+
+	// Configures default mode for source
+	//
+	// @jsonschema(
+	// required=true,
+	// oneOf=["full_refresh","cdc","incremental"]
+	// )
+	DefaultSyncMode types.SyncMode `json:"default_mode"`
+	// Configures Batch Size of Query
+	//
+	// @jsonschema(
+	// required=true
+	// )
+	BatchSize int `json:"reader_batch_size"`
 }
 
 // Standard Sync

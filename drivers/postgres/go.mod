@@ -1,8 +1,8 @@
 module github.com/datazip-inc/olake/drivers/postgres
 
-go 1.23
+go 1.22
 
-toolchain go1.23.5
+toolchain go1.22.5
 
 require (
 	github.com/datazip-inc/olake v0.0.0-20230630130252-054496f39abb

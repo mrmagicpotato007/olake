@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/datazip-inc/olake/safego"
 	"github.com/datazip-inc/olake/types"
 )
 

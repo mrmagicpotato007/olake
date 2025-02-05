@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/datazip-inc/olake/drivers/base"
-	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/pkg/jdbc"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
@@ -14,8 +12,9 @@ import (
 )
 
 // Simple Full Refresh Sync; Loads table fully
-func (p *Postgres) freshSync(stream protocol.Stream, channel chan<- types.Record) error {
-	tx, err := p.client.BeginTx(context.TODO(), &sql.TxOptions{
+func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) error {
+	backfillCtx := context.TODO()
+	tx, err := p.client.BeginTx(backfillCtx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 	})
 	if err != nil {
@@ -26,9 +25,16 @@ func (p *Postgres) freshSync(stream protocol.Stream, channel chan<- types.Record
 
 	stmt := jdbc.PostgresFullRefresh(stream)
 
-	setter := jdbc.NewReader(context.TODO(), stmt, int(stream.BatchSize()), func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	setter := jdbc.NewReader(context.TODO(), stmt, p.config.BatchSize, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 		return tx.Query(query, args...)
 	})
+
+	insert, err := pool.NewThread(backfillCtx, stream)
+	if err != nil {
+		return err
+	}
+	defer insert.Close()
+
 	return setter.Capture(func(rows *sql.Rows) error {
 		// Create a map to hold column names and values
 		record := make(types.Record)
@@ -39,9 +45,14 @@ func (p *Postgres) freshSync(stream protocol.Stream, channel chan<- types.Record
 			return fmt.Errorf("failed to mapScan record data: %s", err)
 		}
 
+		// generate olake id
+		olakeID := utils.GetKeysHash(record, stream.GetStream().SourceDefinedPrimaryKey.Array()...)
 		// insert record
-		if !safego.Insert(channel, base.ReformatRecord(stream, record)) {
-			// channel was closed
+		exit, err := insert.Insert(types.CreateRawRecord(olakeID, record, 0))
+		if err != nil {
+			return err
+		}
+		if exit {
 			return nil
 		}
 
@@ -50,8 +61,9 @@ func (p *Postgres) freshSync(stream protocol.Stream, channel chan<- types.Record
 }
 
 // Incremental Sync based on a Cursor Value
-func (p *Postgres) incrementalSync(stream protocol.Stream, channel chan<- types.Record) error {
-	tx, err := p.client.BeginTx(context.TODO(), &sql.TxOptions{
+func (p *Postgres) incrementalSync(pool *protocol.WriterPool, stream protocol.Stream) error {
+	incrementalCtx := context.TODO()
+	tx, err := p.client.BeginTx(incrementalCtx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 	})
 	if err != nil {
@@ -60,16 +72,21 @@ func (p *Postgres) incrementalSync(stream protocol.Stream, channel chan<- types.
 
 	defer tx.Rollback()
 
-	intialState := stream.InitialState()
 	args := []any{}
 	statement := jdbc.PostgresWithoutState(stream)
-	if intialState != nil {
-		logger.Debugf("Using Initial state for stream %s : %v", stream.ID(), intialState)
-		statement = jdbc.PostgresWithState(stream)
-		args = append(args, intialState)
-	}
 
-	setter := jdbc.NewReader(context.Background(), statement, int(stream.BatchSize()), func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	// intialState := stream.InitialState()
+	// if intialState != nil {
+	// 	logger.Debugf("Using Initial state for stream %s : %v", stream.ID(), intialState)
+	// 	statement = jdbc.PostgresWithState(stream)
+	// 	args = append(args, intialState)
+	// }
+	insert, err := pool.NewThread(incrementalCtx, stream)
+	if err != nil {
+		return err
+	}
+	defer insert.Close()
+	setter := jdbc.NewReader(context.Background(), statement, p.config.BatchSize, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 		return tx.Query(query, args...)
 	}, args...)
 	return setter.Capture(func(rows *sql.Rows) error {
@@ -82,16 +99,22 @@ func (p *Postgres) incrementalSync(stream protocol.Stream, channel chan<- types.
 			return fmt.Errorf("failed to mapScan record data: %s", err)
 		}
 
-		// insert record
-		if !safego.Insert(channel, base.ReformatRecord(stream, record)) {
-			// channel was closed
-			return nil
-		}
+		// create olakeID
+		olakeID := utils.GetKeysHash(record, stream.GetStream().SourceDefinedPrimaryKey.Array()...)
 
-		err = p.UpdateState(stream, record)
+		// insert record
+		exit, err := insert.Insert(types.CreateRawRecord(olakeID, record, 0))
 		if err != nil {
 			return err
 		}
+		if exit {
+			return nil
+		}
+		// TODO: Postgres State Management
+		// err = p.UpdateState(stream, record)
+		// if err != nil {
+		// 	return err
+		// }
 
 		return nil
 	})

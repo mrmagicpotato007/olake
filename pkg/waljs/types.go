@@ -7,7 +7,6 @@ import (
 
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
-	"github.com/datazip-inc/olake/typeutils"
 	"github.com/jackc/pglogrepl"
 )
 
@@ -20,6 +19,7 @@ type Config struct {
 	SnapshotMemorySafetyFactor float64
 	TLSConfig                  *tls.Config
 	State                      *types.Global[*WALState]
+	BatchSize                  int
 }
 
 type WALState struct {
@@ -38,7 +38,7 @@ type ReplicationSlot struct {
 
 type WalJSChange struct {
 	Stream    protocol.Stream
-	Timestamp *typeutils.Time
+	Timestamp time.Time
 	LSN       *pglogrepl.LSN
 	Kind      string
 	Schema    string
@@ -48,7 +48,7 @@ type WalJSChange struct {
 
 type WALMessage struct {
 	// NextLSN   pglogrepl.LSN `json:"nextlsn"`
-	Timestamp typeutils.Time `json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 	Change    []struct {
 		Kind         string        `json:"kind"`
 		Schema       string        `json:"schema"`

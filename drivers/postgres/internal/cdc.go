@@ -26,6 +26,7 @@ func (p *Postgres) prepareWALJSConfig(streams ...protocol.Stream) (*waljs.Config
 		State:               p.cdcState,
 		FullSyncTables:      types.NewSet[protocol.Stream](),
 		Tables:              types.NewSet[protocol.Stream](),
+		BatchSize:           p.config.BatchSize,
 	}
 
 	for _, stream := range streams {
@@ -81,18 +82,16 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 		if message.Kind == "delete" {
 			message.Data[jdbc.CDCDeletedAt] = message.Timestamp
 		}
-		if message.Timestamp != nil {
-			message.Data[jdbc.CDCUpdatedAt] = message.Timestamp
-		}
 		if message.LSN != nil {
 			message.Data[jdbc.CDCLSN] = message.LSN
 		}
+		message.Data[jdbc.CDCUpdatedAt] = message.Timestamp
 
 		// get olake_key_id
 		olakeID := utils.GetKeysHash(message.Data, message.Stream.GetStream().SourceDefinedPrimaryKey.Array()...)
 
 		// insert record
-		rawRecord := types.CreateRawRecord(olakeID, message.Data, message.Timestamp)
+		rawRecord := types.CreateRawRecord(olakeID, message.Data, message.Timestamp.UnixMilli())
 		exit, err := insertionMap[message.Stream](rawRecord)
 		if err != nil {
 			return false, err

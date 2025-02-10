@@ -74,9 +74,9 @@ func init() {
 	// Disable Cobra CLI's built-in usage and error handling
 	RootCmd.SilenceUsage = true
 	RootCmd.SilenceErrors = true
-
-	if err := RootCmd.Execute(); err != nil {
+	err := RootCmd.Execute()
+	logger.Init()
+	if err != nil {
 		logger.Fatal(err)
 	}
-	logger.Init()
 }

@@ -14,7 +14,6 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/oklog/ulid"
-	"github.com/sirupsen/logrus"
 
 	"github.com/spf13/cobra"
 )
@@ -192,26 +191,30 @@ func MaxDate(v1, v2 time.Time) time.Time {
 	return v2
 }
 
-func ULID() string {
+func ULID() (string, error) {
 	return genULID(time.Now())
 }
 
-func genULID(t time.Time) string {
+func genULID(t time.Time) (string, error) {
 	ulidMutex.Lock()
 	defer ulidMutex.Unlock()
 
 	newUlid, err := ulid.New(ulid.Timestamp(t), entropy)
 	if err != nil {
-		logrus.Fatal(err)
+		return "", err
 	}
 
-	return newUlid.String()
+	return newUlid.String(), nil
 }
 
 // Returns a timestamped
 func TimestampedFileName(extension string) string {
 	now := time.Now()
-	return fmt.Sprintf("%d-%d-%d_%d-%d-%d_%s.%s", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), genULID(now), extension)
+	ulid, err := genULID(now)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d-%d-%d_%d-%d-%d_%s.%s", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), ulid, extension)
 }
 
 func IsJSON(str string) bool {

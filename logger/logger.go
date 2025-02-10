@@ -79,7 +79,7 @@ func LogSpec(spec map[string]interface{}) {
 	message.Spec = spec
 	message.Type = types.SpecMessage
 
-	Info("logging spec")
+	Debug("logging spec")
 	Info(message)
 	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(message.Spec, configFolder, "config", ".json")
@@ -93,7 +93,7 @@ func LogCatalog(streams []*types.Stream) {
 	message := types.Message{}
 	message.Type = types.CatalogMessage
 	message.Catalog = types.GetWrappedCatalog(streams)
-	Info("logging catalog")
+	Debug("logging catalog")
 
 	Info(message)
 	// write catalog to the specified file
@@ -142,6 +142,7 @@ func LogState(state *types.State) {
 	message := types.Message{}
 	message.Type = types.StateMessage
 	message.State = state
+	Debug("logging state")
 	Info(message)
 	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(state, configFolder, "state", ".json")
@@ -177,32 +178,34 @@ func FileLogger(content any, filePath string, fileName, fileExtension string) er
 	return nil
 }
 
-// LogColors defines ANSI color codes for log levels
-var logColors = map[string]string{
-	"debug": "\033[36m", // Cyan
-	"info":  "\033[32m", // Green
-	"warn":  "\033[33m", // Yellow
-	"error": "\033[31m", // Red
-	"fatal": "\033[35m", // Magenta
-}
-
 func Init() {
 	// Configure lumberjack for log rotation
 	rotatingFile := &lumberjack.Logger{
-		Filename:   fmt.Sprintf("%s/logs/olake.log", viper.GetString("CONFIG_FOLDER")),
-		MaxSize:    10,
-		MaxBackups: 5,
-		MaxAge:     30,
-		Compress:   true,
+		Filename:   fmt.Sprintf("%s/logs/olake.log", viper.GetString("CONFIG_FOLDER")), // Log file path
+		MaxSize:    10,                                                                 // Max size in MB before log rotation
+		MaxBackups: 5,                                                                  // Max number of old log files to retain
+		MaxAge:     30,                                                                 // Max age in days to retain old log files
+		Compress:   true,                                                               // Compress old log files
 	}
-
+	zerolog.TimestampFunc = func() time.Time {
+		return time.Now().UTC()
+	}
+	// LogColors defines ANSI color codes for log levels
+	var logColors = map[string]string{
+		"debug": "\033[36m", // Cyan
+		"info":  "\033[32m", // Green
+		"warn":  "\033[33m", // Yellow
+		"error": "\033[31m", // Red
+		"fatal": "\033[35m", // Magenta
+	}
 	// Create console writer
 	console := zerolog.ConsoleWriter{
-		Out: os.Stdout,
+		Out:        os.Stdout,
+		TimeFormat: "2006-01-02 15:04:05",
 		FormatLevel: func(i interface{}) string {
 			level := i.(string)
 			color := logColors[level]
-			return color + strings.ToUpper(level) + "\033[0m"
+			return fmt.Sprintf("%s%s\033[0m", color, strings.ToUpper(level))
 		},
 		FormatMessage: func(i interface{}) string {
 			switch v := i.(type) {
@@ -217,11 +220,8 @@ func Init() {
 			}
 		},
 		FormatTimestamp: func(i interface{}) string {
-			return "\033[90m" + fmt.Sprint(i) + "\033[0m"
+			return fmt.Sprintf("\033[90m%s\033[0m", i)
 		},
-	}
-	zerolog.TimestampFunc = func() time.Time {
-		return time.Now().UTC()
 	}
 
 	// Create a multiwriter to log both console and file

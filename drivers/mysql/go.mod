@@ -1,8 +1,6 @@
-module olake-1/drivers/mysql
+module github.com/datazip-inc/olake/drivers/mysql
 
-go 1.23.4
-
-replace olake-1/drivers/mysql => /Users/datazip/Desktop/olake-1/drivers/mysql
+go 1.22
 
 require (
 	github.com/datazip-inc/olake v0.0.0-20250128110354-c588ead6f5c9
@@ -42,6 +40,7 @@ require (
 	github.com/jackc/pgtype v1.10.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/magiconair/properties v1.8.0 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect

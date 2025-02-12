@@ -1,7 +1,7 @@
 package main
 
 import (
-	driver "olake-1/drivers/mysql"
+	driver "github.com/datazip-inc/olake/drivers/mysql/internal"
 
 	"github.com/datazip-inc/olake"
 	"github.com/datazip-inc/olake/drivers/base"

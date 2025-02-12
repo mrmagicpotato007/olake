@@ -47,10 +47,6 @@ func (m *MySQL) Setup() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
-
-	// Configure connection pool
-	db.SetMaxOpenConns(m.config.MaxConnections)
-	db.SetMaxIdleConns(m.config.MaxConnections / 2)
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	// Test connection
@@ -132,7 +128,6 @@ func (m *MySQL) Discover(discoverSchema bool) ([]*types.Stream, error) {
 		if err != nil && discoverCtx.Err() == nil {
 			return fmt.Errorf("failed to process table[%s]: %s", streamName, err)
 		}
-		stream.SyncMode = m.config.DefaultMode
 		// cache stream
 		m.AddStream(stream)
 		return err
@@ -145,17 +140,17 @@ func (m *MySQL) Discover(discoverSchema bool) ([]*types.Stream, error) {
 	return m.GetStreams(), nil
 }
 
-// // Read handles different sync modes for data retrieval
-// func (m *MySQL) Read(pool *protocol.WriterPool, stream protocol.Stream) error {
-// 	// switch stream.GetSyncMode() {
-// 	// case types.FULLREFRESH:
-// 	// 	return m.backfill(stream, pool)
-// 	// case types.CDC:
-// 	// 	return m.changeStreamSync(stream, pool)
-// 	// }
+// Read handles different sync modes for data retrieval
+func (m *MySQL) Read(pool *protocol.WriterPool, stream protocol.Stream) error {
+	switch stream.GetSyncMode() {
+	case types.FULLREFRESH:
+		return m.backfill(stream, pool)
+	case types.CDC:
+		return m.changeStreamSync(stream, pool)
+	}
 
-// 	// return nil
-// }
+	return nil
+}
 
 // produceTableSchema extracts schema information for a given table
 func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*types.Stream, error) {
@@ -252,12 +247,12 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	return stream, nil
 }
 
-// // Additional methods for backfill and changeStreamSync would need to be implemented
-// // These are placeholders to complete the interface
-// func (m *MySQL) backfill(stream protocol.Stream, pool *protocol.WriterPool) error {
-// 	// Implement full table refresh logic
-// 	return nil
-// }
+// Additional methods for backfill and changeStreamSync would need to be implemented
+// These are placeholders to complete the interface
+func (m *MySQL) backfill(_ protocol.Stream, _ *protocol.WriterPool) error {
+	// Implement full table refresh logic
+	return nil
+}
 
 func (m *MySQL) changeStreamSync(_ protocol.Stream, _ *protocol.WriterPool) error {
 	// Implement change data capture (CDC) logic
@@ -268,4 +263,10 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 	return utils.Concurrent(context.TODO(), streams, len(streams), func(ctx context.Context, stream protocol.Stream, executionNumber int) error {
 		return m.changeStreamSync(stream, pool)
 	})
+}
+func (m *MySQL) SetupGlobalState(state *types.State) error {
+	return nil
+}
+func (m *MySQL) StateType() types.StateType {
+	return types.GlobalType
 }

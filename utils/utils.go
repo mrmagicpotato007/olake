@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -268,31 +267,4 @@ func CreateFile(content any, filePath string, fileName, fileExtension string) er
 	}
 
 	return nil
-}
-
-// CreatePartitionPath generates a partitioned path by replacing placeholders with actual values
-func CreatePartitionPath(pattern string, values map[string]any) string {
-	// Regex to match placeholders like {date, hour, "fallback"}
-	patternRegex := regexp.MustCompile(`\{([^}]+)\}`)
-
-	// Replace placeholders
-	result := patternRegex.ReplaceAllStringFunc(pattern, func(match string) string {
-		trimmed := strings.Trim(match, "{}")
-		regexVarBlock := strings.Split(trimmed, ",")
-
-		var replacedParts []string
-		for i, part := range regexVarBlock {
-			part = strings.TrimSpace(part)
-			part = strings.Trim(part, `"`)
-
-			if val, exists := values[part]; exists && val != "" {
-				replacedParts = append(replacedParts, val.(string))
-			} else if i == len(replacedParts)-1 {
-				replacedParts = append(replacedParts, part)
-			}
-		}
-		return strings.Join(replacedParts, "/")
-	})
-
-	return result
 }

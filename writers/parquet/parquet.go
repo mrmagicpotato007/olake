@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -35,14 +36,14 @@ type FileMetadata struct {
 
 // Parquet destination writes Parquet files to a local path and optionally uploads them to S3.
 type Parquet struct {
-	options       *protocol.Options
-	config        *Config
-	openPqFiles   map[string]FileMetadata // path -> pqFile
-	stream        protocol.Stream
-	basePath      string
-	baseFileName  string
-	pqSchemaMutex sync.Mutex // To prevent concurrent map access from fraugster library
-	s3Client      *s3.S3
+	options          *protocol.Options
+	config           *Config
+	partitionFolders map[string][]FileMetadata // path -> pqFile
+	stream           protocol.Stream
+	basePath         string
+	baseFileName     *string
+	pqSchemaMutex    sync.Mutex // To prevent concurrent map access from fraugster library
+	s3Client         *s3.S3
 }
 
 // GetConfigRef returns the config reference for the parquet writer.
@@ -77,31 +78,41 @@ func (p *Parquet) initS3Writer() error {
 	return nil
 }
 
-// create parquet writer for given file path
-func (p *Parquet) CreateNewParquetWriter(dirPath, fileName string) error {
-	var fileMetadata FileMetadata
-	filePath := filepath.Join(dirPath, fileName)
+func (p *Parquet) createNewParquetWriter(dirPath string) error {
 	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create directories[%s]: %s", dirPath, err)
+		return fmt.Errorf("failed to create directories[%s]: %w", dirPath, err)
 	}
 
-	// Initialize local Parquet writer
+	fileName := utils.TimestampedFileName(constants.ParquetFileExt)
+	filePath := filepath.Join(dirPath, fileName)
+
 	pqFile, err := local.NewLocalFileWriter(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to create parquet file writer: %s", err)
+		return fmt.Errorf("failed to create parquet file writer: %w", err)
 	}
-	if p.config.Normalization {
-		fileMetadata.writer = goparquet.NewFileWriter(pqFile, goparquet.WithSchemaDefinition(p.stream.Schema().ToParquet()),
-			goparquet.WithMaxRowGroupSize(100),
-			goparquet.WithMaxPageSize(10),
-			goparquet.WithCompressionCodec(parquet.CompressionCodec_SNAPPY),
-		)
-	} else {
-		fileMetadata.writer = pqgo.NewGenericWriter[types.RawRecord](pqFile, pqgo.Compression(&pqgo.Snappy))
+
+	writer := func() any {
+		if p.config.Normalization {
+			return goparquet.NewFileWriter(pqFile,
+				goparquet.WithSchemaDefinition(p.stream.Schema().ToParquet()),
+				goparquet.WithMaxRowGroupSize(100),
+				goparquet.WithMaxPageSize(10),
+				goparquet.WithCompressionCodec(parquet.CompressionCodec_SNAPPY),
+			)
+		}
+		return pqgo.NewGenericWriter[types.RawRecord](pqFile, pqgo.Compression(&pqgo.Snappy))
+	}()
+
+	p.partitionFolders[dirPath] = append(p.partitionFolders[dirPath], FileMetadata{
+		fileName: fileName,
+		file:     pqFile,
+		writer:   writer,
+	})
+
+	// base file name if parition not there
+	if p.baseFileName == nil {
+		p.baseFileName = &fileName
 	}
-	fileMetadata.fileName = fileName
-	fileMetadata.file = pqFile
-	p.openPqFiles[filePath] = fileMetadata
 	return nil
 }
 
@@ -109,18 +120,19 @@ func (p *Parquet) CreateNewParquetWriter(dirPath, fileName string) error {
 func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error {
 	p.options = options
 	p.stream = stream
-	p.openPqFiles = make(map[string]FileMetadata)
+	p.partitionFolders = make(map[string][]FileMetadata)
 
 	// for s3 p.config.path may not be provided
 	if p.config.Path == "" {
 		p.config.Path = os.TempDir()
 	}
-	p.baseFileName = utils.TimestampedFileName(constants.ParquetFileExt)
+
 	p.basePath = filepath.Join(p.config.Path, p.stream.Namespace(), p.stream.Name())
-	err := p.CreateNewParquetWriter(p.basePath, p.baseFileName)
+	err := p.createNewParquetWriter(p.basePath)
 	if err != nil {
 		return fmt.Errorf("failed to create new parquet writer for file[%s] : %s", p.baseFileName, err)
 	}
+
 	err = p.initS3Writer()
 	if err != nil {
 		return err
@@ -130,23 +142,24 @@ func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error
 
 // Write writes a record to the Parquet file.
 func (p *Parquet) Write(_ context.Context, record types.RawRecord) error {
-	// Lock for thread safety and write the record
-	filePath := filepath.Join(p.basePath, p.baseFileName)
-	partitionRegex := p.stream.Self().StreamMetadata.PartitionRegex
-	if partitionRegex != "" {
-		regexPath := utils.CreatePartitionPath(p.stream.Self().StreamMetadata.PartitionRegex, record.Data)
-		filePath = filepath.Join(p.basePath, regexPath)
-	}
-	fileMetadata, ok := p.openPqFiles[filePath]
-	if !ok {
-		fileName := utils.TimestampedFileName(constants.ParquetFileExt)
-		err := p.CreateNewParquetWriter(filePath, fileName)
+	regexFilePath := p.getPartitionedFilePath(record.Data)
+
+	partitionFolder, exists := p.partitionFolders[regexFilePath]
+	if !exists {
+		err := p.createNewParquetWriter(regexFilePath)
 		if err != nil {
 			return err
 		}
-		filePath = filepath.Join(filePath, fileName)
-		fileMetadata = p.openPqFiles[filePath]
+		partitionFolder = p.partitionFolders[regexFilePath]
 	}
+
+	if len(partitionFolder) == 0 {
+		return fmt.Errorf("failed to get partitioned files")
+	}
+
+	// get last written file
+	fileMetadata := &partitionFolder[len(partitionFolder)-1]
+
 	if p.config.Normalization {
 		// TODO: Need to check if we can remove locking to fasten sync (Good First Issue)
 		p.pqSchemaMutex.Lock()
@@ -161,7 +174,6 @@ func (p *Parquet) Write(_ context.Context, record types.RawRecord) error {
 		}
 	}
 	fileMetadata.recordCount++
-	p.openPqFiles[filePath] = fileMetadata
 	return nil
 }
 
@@ -219,34 +231,38 @@ func (p *Parquet) Close() error {
 
 	// Defer closing and possible file removal if no records were written
 	defer func() {
-		for path, fileMetadata := range p.openPqFiles {
-			if fileMetadata.recordCount == 0 {
-				removeLocalFile(path, "no records written", fileMetadata.recordCount)
+		for path, openFiles := range p.partitionFolders {
+			for _, fileMetadata := range openFiles {
+				if fileMetadata.recordCount == 0 {
+					removeLocalFile(filepath.Join(path, fileMetadata.fileName), "no records written", fileMetadata.recordCount)
+				}
 			}
 		}
 	}()
 
 	// Close the writer and file
 	if err := utils.ErrExecSequential(func() error {
-		for path, fileMetadata := range p.openPqFiles {
-			if p.config.Normalization {
-				err := fileMetadata.writer.(*goparquet.FileWriter).Close()
-				if err != nil {
-					return fmt.Errorf("failed to close normalize writer: %s", err)
+		for dir, openedFiles := range p.partitionFolders {
+			for _, fileMetadata := range openedFiles {
+				path := filepath.Join(dir, fileMetadata.fileName)
+				if p.config.Normalization {
+					err := fileMetadata.writer.(*goparquet.FileWriter).Close()
+					if err != nil {
+						return fmt.Errorf("failed to close normalize writer: %s", err)
+					}
+				} else {
+					err := fileMetadata.writer.(*pqgo.GenericWriter[types.RawRecord]).Close()
+					if err != nil {
+						return fmt.Errorf("failed to close base writer: %s", err)
+					}
 				}
-			} else {
-				err := fileMetadata.writer.(*pqgo.GenericWriter[types.RawRecord]).Close()
-				if err != nil {
-					return fmt.Errorf("failed to close base writer: %s", err)
+				if err := fileMetadata.file.Close(); err != nil {
+					return fmt.Errorf("failed to close file: %s", err)
+				}
+				if fileMetadata.recordCount > 0 {
+					logger.Infof("Finished writing file [%s] with %d records.", path, fileMetadata.recordCount)
 				}
 			}
-			if err := fileMetadata.file.Close(); err != nil {
-				return fmt.Errorf("failed to close file: %s", err)
-			}
-			if fileMetadata.recordCount > 0 {
-				logger.Infof("Finished writing file [%s] with %d records.", path, fileMetadata.recordCount)
-			}
-
 		}
 		return nil
 	}); err != nil {
@@ -255,30 +271,33 @@ func (p *Parquet) Close() error {
 
 	// Upload to S3 if configured and records exist
 	if p.s3Client != nil {
-		for path, fileMetadata := range p.openPqFiles {
-			file, err := os.Open(path)
-			if err != nil {
-				return fmt.Errorf("failed to open local file for S3 upload: %s", err)
-			}
-			defer file.Close()
+		for dir, openedFiles := range p.partitionFolders {
+			for _, fileMetadata := range openedFiles {
+				path := filepath.Join(dir, fileMetadata.fileName)
+				file, err := os.Open(path)
+				if err != nil {
+					return fmt.Errorf("failed to open local file for S3 upload: %s", err)
+				}
+				defer file.Close()
 
-			basePath := filepath.Join(p.stream.Namespace(), p.stream.Name())
-			if p.config.Prefix != "" {
-				basePath = filepath.Join(p.config.Prefix, basePath)
-			}
-			s3KeyPath := filepath.Join(basePath, fileMetadata.fileName)
-			_, err = p.s3Client.PutObject(&s3.PutObjectInput{
-				Bucket: aws.String(p.config.Bucket),
-				Key:    aws.String(s3KeyPath),
-				Body:   file,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to upload file to S3 (bucket: %s, path: %s): %s", p.config.Bucket, s3KeyPath, err)
-			}
+				basePath := filepath.Join(p.stream.Namespace(), p.stream.Name())
+				if p.config.Prefix != "" {
+					basePath = filepath.Join(p.config.Prefix, basePath)
+				}
+				s3KeyPath := filepath.Join(basePath, fileMetadata.fileName)
+				_, err = p.s3Client.PutObject(&s3.PutObjectInput{
+					Bucket: aws.String(p.config.Bucket),
+					Key:    aws.String(s3KeyPath),
+					Body:   file,
+				})
+				if err != nil {
+					return fmt.Errorf("failed to upload file to S3 (bucket: %s, path: %s): %s", p.config.Bucket, s3KeyPath, err)
+				}
 
-			// remove local file after upload
-			removeLocalFile(path, "uploaded to S3", fileMetadata.recordCount)
-			logger.Infof("Successfully uploaded file to S3: s3://%s/%s", p.config.Bucket, s3KeyPath)
+				// remove local file after upload
+				removeLocalFile(path, "uploaded to S3", fileMetadata.recordCount)
+				logger.Infof("Successfully uploaded file to S3: s3://%s/%s", p.config.Bucket, s3KeyPath)
+			}
 		}
 	}
 
@@ -319,6 +338,36 @@ func (p *Parquet) Normalization() bool {
 	return p.config.Normalization
 }
 
+func (p *Parquet) getPartitionedFilePath(values map[string]any) string {
+	// Regex to match placeholders like {date, hour, "fallback"}
+	pattern := p.stream.Self().StreamMetadata.PartitionRegex
+	if pattern == "" {
+		return p.basePath
+	}
+
+	patternRegex := regexp.MustCompile(`\{([^}]+)\}`)
+
+	// Replace placeholders
+	result := patternRegex.ReplaceAllStringFunc(pattern, func(match string) string {
+		trimmed := strings.Trim(match, "{}")
+		regexVarBlock := strings.Split(trimmed, ",")
+
+		var replacedParts []string
+		for i, part := range regexVarBlock {
+			part = strings.TrimSpace(strings.Trim(part, `"`))
+
+			if val, exists := values[part]; exists && val != "" {
+				replacedParts = append(replacedParts, val.(string))
+				break
+			} else if i == len(regexVarBlock)-1 {
+				replacedParts = append(replacedParts, part)
+			}
+		}
+		return strings.Join(replacedParts, "/")
+	})
+
+	return filepath.Join(p.basePath, strings.TrimSuffix(result, "/"))
+}
 func init() {
 	protocol.RegisteredWriters[types.Parquet] = func() protocol.Writer {
 		return new(Parquet)

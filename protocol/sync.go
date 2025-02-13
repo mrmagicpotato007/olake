@@ -93,7 +93,7 @@ var syncCmd = &cobra.Command{
 
 			sMetadata, selected := selectedStreamsMap[fmt.Sprintf("%s.%s", elem.Namespace(), elem.Name())]
 			// Check if the stream is in the selectedStreamMap
-			if !(catalog.SelectedStreams == nil || selected) { // TODO: check once
+			if !(catalog.SelectedStreams == nil || selected) {
 				logger.Warnf("Skipping stream %s.%s; not in selected streams.", elem.Name(), elem.Namespace())
 				return false
 			}

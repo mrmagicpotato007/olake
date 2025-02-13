@@ -39,7 +39,7 @@ type FileMetadata struct {
 type Parquet struct {
 	options          *protocol.Options
 	config           *Config
-	partitionedFiles map[string][]FileMetadata // path -> pqFile
+	partitionedFiles map[string][]FileMetadata // directory -> pqFiles
 	stream           protocol.Stream
 	basePath         string
 	pqSchemaMutex    sync.Mutex // To prevent concurrent map access from fraugster library
@@ -126,7 +126,7 @@ func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error
 	p.basePath = filepath.Join(p.config.Path, p.stream.Namespace(), p.stream.Name())
 	err := p.createNewPartitionFile(p.basePath)
 	if err != nil {
-		return fmt.Errorf("failed to create new parquet writer : %s", err)
+		return fmt.Errorf("failed to create new partition file: %s", err)
 	}
 
 	err = p.initS3Writer()
@@ -144,7 +144,7 @@ func (p *Parquet) Write(_ context.Context, record types.RawRecord) error {
 	if !exists {
 		err := p.createNewPartitionFile(partitionedPath)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create parititon file: %s", err)
 		}
 		partitionFolder = p.partitionedFiles[partitionedPath]
 	}

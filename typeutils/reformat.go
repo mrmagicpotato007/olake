@@ -3,10 +3,11 @@ package typeutils
 import (
 	"database/sql"
 	"fmt"
-	"github.com/datazip-inc/olake/types"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"strconv"
 	"time"
+
+	"github.com/datazip-inc/olake/types"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type StringInterface interface {

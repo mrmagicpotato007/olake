@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -334,7 +335,7 @@ func (p *Parquet) getPartitionedFilePath(values map[string]any) string {
 	if pattern == "" {
 		return p.basePath
 	}
-
+	// path pattern example /{col_name, 'fallback', granularity}/random_string/{col_name, fallback, granularity}
 	patternRegex := regexp.MustCompile(`\{([^}]+)\}`)
 
 	// Replace placeholders
@@ -342,18 +343,41 @@ func (p *Parquet) getPartitionedFilePath(values map[string]any) string {
 		trimmed := strings.Trim(match, "{}")
 		regexVarBlock := strings.Split(trimmed, ",")
 
-		var replacedParts []string
-		for i, part := range regexVarBlock {
-			part = strings.TrimSpace(strings.Trim(part, `"`))
+		colName := strings.TrimSpace(strings.Trim(regexVarBlock[0], `'`))
+		defaultValue := strings.TrimSpace(strings.Trim(regexVarBlock[1], `'`))
+		granularity := strings.TrimSpace(strings.Trim(regexVarBlock[2], `'`))
 
-			if val, exists := values[part]; exists && val != "" {
-				replacedParts = append(replacedParts, val.(string))
-				break
-			} else if i == len(regexVarBlock)-1 {
-				replacedParts = append(replacedParts, part)
+		granularityFunction := func(value any) string {
+			if granularity != "" {
+				timestampInterface, err := typeutils.ReformatValue(types.Timestamp, value)
+				if err == nil {
+					timestamp, converted := timestampInterface.(time.Time)
+					if converted {
+						switch granularity {
+						case "HH":
+							value = timestamp.UTC().Hour()
+						case "DD":
+							value = timestamp.UTC().Day()
+						case "WW":
+							value = timestamp.UTC().Weekday()
+						case "MM":
+							value = timestamp.UTC().Month()
+						case "YY":
+							value = timestamp.UTC().Year()
+						}
+					}
+				}
 			}
+			return fmt.Sprintf("%v", value)
 		}
-		return strings.Join(replacedParts, "/")
+		if colName == "now()" {
+			return granularityFunction(time.Now().UTC())
+		}
+		value, exists := values[colName]
+		if exists {
+			return granularityFunction(value)
+		}
+		return defaultValue
 	})
 
 	return filepath.Join(p.basePath, strings.TrimSuffix(result, "/"))

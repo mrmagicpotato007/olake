@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -27,21 +26,23 @@ import (
 	"github.com/xitongsys/parquet-go/source"
 )
 
+type FileMetadata struct {
+	fileName    string
+	recordCount int
+	writer      any
+	file        source.ParquetFile
+}
+
 // Parquet destination writes Parquet files to a local path and optionally uploads them to S3.
 type Parquet struct {
-	options             *protocol.Options
-	fileName            string
-	destinationFilePath string
-	closed              bool
-	config              *Config
-	file                source.ParquetFile
-	normalizedWriter    *goparquet.FileWriter // TODO: implement parquet writer as interface (dependency injection)
-	baseWriter          *pqgo.GenericWriter[types.RawRecord]
-	stream              protocol.Stream
-	records             atomic.Int64
-	pqSchemaMutex       sync.Mutex // To prevent concurrent map access from fraugster library
-	s3Client            *s3.S3
-	s3KeyPath           string
+	options       *protocol.Options
+	config        *Config
+	openPqFiles   map[string]FileMetadata // path -> pqFile
+	stream        protocol.Stream
+	basePath      string
+	baseFileName  string
+	pqSchemaMutex sync.Mutex // To prevent concurrent map access from fraugster library
+	s3Client      *s3.S3
 }
 
 // GetConfigRef returns the config reference for the parquet writer.
@@ -76,83 +77,92 @@ func (p *Parquet) initS3Writer() error {
 	return nil
 }
 
-// Setup configures the parquet writer, including local paths, file names, and optional S3 setup.
-func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error {
-	p.options = options
-	p.fileName = utils.TimestampedFileName(constants.ParquetFileExt)
-
-	// for s3 p.config.path may not be provided
-	if p.config.Path == "" {
-		p.config.Path = os.TempDir()
-	}
-
-	p.destinationFilePath = filepath.Join(p.config.Path, stream.Namespace(), stream.Name(), p.fileName)
-	if err := os.MkdirAll(filepath.Dir(p.destinationFilePath), os.ModePerm); err != nil {
-		return fmt.Errorf("failed to create directories: %s", err)
+// create parquet writer for given file path
+func (p *Parquet) CreateNewParquetWriter(dirPath, fileName string) error {
+	var fileMetadata FileMetadata
+	filePath := filepath.Join(dirPath, fileName)
+	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directories[%s]: %s", dirPath, err)
 	}
 
 	// Initialize local Parquet writer
-	pqFile, err := local.NewLocalFileWriter(p.destinationFilePath)
+	pqFile, err := local.NewLocalFileWriter(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to create parquet file writer: %s", err)
 	}
 	if p.config.Normalization {
-		p.normalizedWriter = goparquet.NewFileWriter(pqFile, goparquet.WithSchemaDefinition(stream.Schema().ToParquet()),
+		fileMetadata.writer = goparquet.NewFileWriter(pqFile, goparquet.WithSchemaDefinition(p.stream.Schema().ToParquet()),
 			goparquet.WithMaxRowGroupSize(100),
 			goparquet.WithMaxPageSize(10),
 			goparquet.WithCompressionCodec(parquet.CompressionCodec_SNAPPY),
 		)
 	} else {
-		p.baseWriter = pqgo.NewGenericWriter[types.RawRecord](pqFile, pqgo.Compression(&pqgo.Snappy))
+		fileMetadata.writer = pqgo.NewGenericWriter[types.RawRecord](pqFile, pqgo.Compression(&pqgo.Snappy))
 	}
+	fileMetadata.fileName = fileName
+	fileMetadata.file = pqFile
+	p.openPqFiles[filePath] = fileMetadata
+	return nil
+}
 
-	p.file = pqFile
+// Setup configures the parquet writer, including local paths, file names, and optional S3 setup.
+func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error {
+	p.options = options
 	p.stream = stream
+	p.openPqFiles = make(map[string]FileMetadata)
 
+	// for s3 p.config.path may not be provided
+	if p.config.Path == "" {
+		p.config.Path = os.TempDir()
+	}
+	p.baseFileName = utils.TimestampedFileName(constants.ParquetFileExt)
+	p.basePath = filepath.Join(p.config.Path, p.stream.Namespace(), p.stream.Name())
+	err := p.CreateNewParquetWriter(p.basePath, p.baseFileName)
+	if err != nil {
+		return fmt.Errorf("failed to create new parquet writer for file[%s] : %s", p.baseFileName, err)
+	}
 	err = p.initS3Writer()
 	if err != nil {
 		return err
 	}
-	// Setup S3 client if S3 configuration is provided
-	if p.s3Client != nil {
-		basePath := filepath.Join(stream.Namespace(), stream.Name())
-		if p.config.Prefix != "" {
-			basePath = filepath.Join(p.config.Prefix, basePath)
-		}
-		p.s3KeyPath = filepath.Join(basePath, p.fileName)
-	}
-
 	return nil
 }
 
 // Write writes a record to the Parquet file.
 func (p *Parquet) Write(_ context.Context, record types.RawRecord) error {
 	// Lock for thread safety and write the record
-	if p.normalizedWriter != nil {
+	filePath := filepath.Join(p.basePath, p.baseFileName)
+	partitionRegex := p.stream.Self().StreamMetadata.PartitionRegex
+	if partitionRegex != "" {
+		regexPath := utils.CreatePartitionPath(p.stream.Self().StreamMetadata.PartitionRegex, record.Data)
+		filePath = filepath.Join(p.basePath, regexPath)
+	}
+	fileMetadata, ok := p.openPqFiles[filePath]
+	if !ok {
+		fileName := utils.TimestampedFileName(constants.ParquetFileExt)
+		err := p.CreateNewParquetWriter(filePath, fileName)
+		if err != nil {
+			return err
+		}
+		filePath = filepath.Join(filePath, fileName)
+		fileMetadata = p.openPqFiles[filePath]
+	}
+	if p.config.Normalization {
 		// TODO: Need to check if we can remove locking to fasten sync (Good First Issue)
 		p.pqSchemaMutex.Lock()
 		defer p.pqSchemaMutex.Unlock()
-		if err := p.normalizedWriter.AddData(record.Data); err != nil {
+		if err := fileMetadata.writer.(*goparquet.FileWriter).AddData(record.Data); err != nil {
 			return fmt.Errorf("parquet write error: %s", err)
 		}
 	} else {
 		// locking not required as schema is fixed for base writer
-		if _, err := p.baseWriter.Write([]types.RawRecord{record}); err != nil {
+		if _, err := fileMetadata.writer.(*pqgo.GenericWriter[types.RawRecord]).Write([]types.RawRecord{record}); err != nil {
 			return fmt.Errorf("parquet write error: %s", err)
 		}
 	}
-	p.records.Add(1)
+	fileMetadata.recordCount++
+	p.openPqFiles[filePath] = fileMetadata
 	return nil
-}
-
-// ReInitiationOnTypeChange always returns true to reinitialize on type change.
-func (p *Parquet) ReInitiationOnTypeChange() bool {
-	return true
-}
-
-// ReInitiationOnNewColumns always returns true to reinitialize on new columns.
-func (p *Parquet) ReInitiationOnNewColumns() bool {
-	return true
 }
 
 // Check validates local paths and S3 credentials if applicable.
@@ -198,80 +208,99 @@ func (p *Parquet) Check() error {
 }
 
 func (p *Parquet) Close() error {
-	if p.closed {
-		return nil
-	}
-
-	recordCount := p.records.Load()
-	removeLocalFile := func(reason string) {
-		err := os.Remove(p.destinationFilePath)
+	removeLocalFile := func(filePath, reason string, recordCount int) {
+		err := os.Remove(filePath)
 		if err != nil {
-			logger.Warnf("Failed to delete file [%s] with %d records (%s): %s", p.destinationFilePath, recordCount, reason, err)
+			logger.Warnf("Failed to delete file [%s] with %d records (%s): %s", filePath, recordCount, reason, err)
 			return
 		}
-		logger.Debugf("Deleted file [%s] with %d records (%s).", p.destinationFilePath, recordCount, reason)
+		logger.Debugf("Deleted file [%s] with %d records (%s).", filePath, recordCount, reason)
 	}
 
 	// Defer closing and possible file removal if no records were written
 	defer func() {
-		p.closed = true
-		if recordCount == 0 {
-			removeLocalFile("no records written")
+		for path, fileMetadata := range p.openPqFiles {
+			if fileMetadata.recordCount == 0 {
+				removeLocalFile(path, "no records written", fileMetadata.recordCount)
+			}
 		}
 	}()
 
 	// Close the writer and file
-	if err := utils.ErrExecSequential(
-		utils.ErrExecFormat("failed to close writer: %s", func() error {
-			if p.baseWriter != nil {
-				return p.baseWriter.Close()
+	if err := utils.ErrExecSequential(func() error {
+		for path, fileMetadata := range p.openPqFiles {
+			if p.config.Normalization {
+				err := fileMetadata.writer.(*goparquet.FileWriter).Close()
+				if err != nil {
+					return fmt.Errorf("failed to close normalize writer: %s", err)
+				}
+			} else {
+				err := fileMetadata.writer.(*pqgo.GenericWriter[types.RawRecord]).Close()
+				if err != nil {
+					return fmt.Errorf("failed to close base writer: %s", err)
+				}
 			}
-			return p.normalizedWriter.Close()
-		}),
-		utils.ErrExecFormat("failed to close file: %s", p.file.Close),
-	); err != nil {
-		return fmt.Errorf("failed to close parquet writer after adding %d records: %s", recordCount, err)
-	}
+			if err := fileMetadata.file.Close(); err != nil {
+				return fmt.Errorf("failed to close file: %s", err)
+			}
+			if fileMetadata.recordCount > 0 {
+				logger.Infof("Finished writing file [%s] with %d records.", path, fileMetadata.recordCount)
+			}
 
-	// Log if records were written
-	if recordCount > 0 {
-		logger.Infof("Finished writing file [%s] with %d records.", p.destinationFilePath, recordCount)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to close parquet writer: %s", err)
 	}
 
 	// Upload to S3 if configured and records exist
-	if p.s3Client != nil && recordCount > 0 {
-		file, err := os.Open(p.destinationFilePath)
-		if err != nil {
-			return fmt.Errorf("failed to open local file for S3 upload: %s", err)
-		}
-		defer file.Close()
+	if p.s3Client != nil {
+		for path, fileMetadata := range p.openPqFiles {
+			file, err := os.Open(path)
+			if err != nil {
+				return fmt.Errorf("failed to open local file for S3 upload: %s", err)
+			}
+			defer file.Close()
 
-		_, err = p.s3Client.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String(p.config.Bucket),
-			Key:    aws.String(p.s3KeyPath),
-			Body:   file,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to upload file to S3 (bucket: %s, path: %s): %s", p.config.Bucket, p.s3KeyPath, err)
-		}
+			basePath := filepath.Join(p.stream.Namespace(), p.stream.Name())
+			if p.config.Prefix != "" {
+				basePath = filepath.Join(p.config.Prefix, basePath)
+			}
+			s3KeyPath := filepath.Join(basePath, fileMetadata.fileName)
+			_, err = p.s3Client.PutObject(&s3.PutObjectInput{
+				Bucket: aws.String(p.config.Bucket),
+				Key:    aws.String(s3KeyPath),
+				Body:   file,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to upload file to S3 (bucket: %s, path: %s): %s", p.config.Bucket, s3KeyPath, err)
+			}
 
-		// remove local file after upload
-		removeLocalFile("uploaded to S3")
-		logger.Infof("Successfully uploaded file to S3: s3://%s/%s", p.config.Bucket, p.s3KeyPath)
+			// remove local file after upload
+			removeLocalFile(path, "uploaded to S3", fileMetadata.recordCount)
+			logger.Infof("Successfully uploaded file to S3: s3://%s/%s", p.config.Bucket, s3KeyPath)
+		}
 	}
 
 	return nil
 }
 
 // EvolveSchema updates the schema based on changes.
-func (p *Parquet) EvolveSchema(_ map[string]*types.Property) error {
-	p.pqSchemaMutex.Lock()
-	defer p.pqSchemaMutex.Unlock()
-
-	// Attempt to set the schema definition
-	if err := p.normalizedWriter.SetSchemaDefinition(p.stream.Schema().ToParquet()); err != nil {
-		return fmt.Errorf("failed to set schema definition: %s", err)
-	}
+func (p *Parquet) EvolveSchema(change, typeChange bool, _ map[string]*types.Property) error {
+	// p.pqSchemaMutex.Lock()
+	// defer p.pqSchemaMutex.Unlock()
+	// TODO: Edge Cases need to think here 1. if file changing is of partition only
+	// if typeChange || change {
+	// 	// change base file for it
+	// 	p.baseFileName = utils.TimestampedFileName(constants.ParquetFileExt)
+	// 	if err := p.CreateNewParquetWriter(p.basePath, p.baseFileName); err != nil { // init new writer
+	// 		return err
+	// 	}
+	// }
+	// // Attempt to set the schema definition
+	// if err := p.openPqWriters.SetSchemaDefinition(p.stream.Schema().ToParquet()); err != nil {
+	// 	return fmt.Errorf("failed to set schema definition: %s", err)
+	// }
 	return nil
 }
 

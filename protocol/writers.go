@@ -141,7 +141,7 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 			w.tmu.Lock()
 			stream.Schema().Override(fields.ToProperties()) // update the schema in Stream
 			w.tmu.Unlock()
-			err := thread.EvolveSchema(change, typeChange, mutations.ToProperties())
+			err := thread.EvolveSchema(change, typeChange, mutations.ToProperties(), flattenedData)
 			if err != nil {
 				return nil, fmt.Errorf("failed to evolve schema: %s", err)
 			}

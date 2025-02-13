@@ -41,7 +41,6 @@ type Parquet struct {
 	partitionFolders map[string][]FileMetadata // path -> pqFile
 	stream           protocol.Stream
 	basePath         string
-	baseFileName     *string
 	pqSchemaMutex    sync.Mutex // To prevent concurrent map access from fraugster library
 	s3Client         *s3.S3
 }
@@ -109,10 +108,6 @@ func (p *Parquet) createNewParquetWriter(dirPath string) error {
 		writer:   writer,
 	})
 
-	// base file name if parition not there
-	if p.baseFileName == nil {
-		p.baseFileName = &fileName
-	}
 	return nil
 }
 
@@ -130,7 +125,7 @@ func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error
 	p.basePath = filepath.Join(p.config.Path, p.stream.Namespace(), p.stream.Name())
 	err := p.createNewParquetWriter(p.basePath)
 	if err != nil {
-		return fmt.Errorf("failed to create new parquet writer for file[%s] : %s", p.baseFileName, err)
+		return fmt.Errorf("failed to create new parquet writer : %s", err)
 	}
 
 	err = p.initS3Writer()
@@ -305,21 +300,16 @@ func (p *Parquet) Close() error {
 }
 
 // EvolveSchema updates the schema based on changes.
-func (p *Parquet) EvolveSchema(change, typeChange bool, _ map[string]*types.Property) error {
-	// p.pqSchemaMutex.Lock()
-	// defer p.pqSchemaMutex.Unlock()
-	// TODO: Edge Cases need to think here 1. if file changing is of partition only
-	// if typeChange || change {
-	// 	// change base file for it
-	// 	p.baseFileName = utils.TimestampedFileName(constants.ParquetFileExt)
-	// 	if err := p.CreateNewParquetWriter(p.basePath, p.baseFileName); err != nil { // init new writer
-	// 		return err
-	// 	}
-	// }
-	// // Attempt to set the schema definition
-	// if err := p.openPqWriters.SetSchemaDefinition(p.stream.Schema().ToParquet()); err != nil {
-	// 	return fmt.Errorf("failed to set schema definition: %s", err)
-	// }
+func (p *Parquet) EvolveSchema(change, typeChange bool, _ map[string]*types.Property, data types.Record) error {
+	if change || typeChange {
+		// create new file and append at end
+		regexFilePath := p.getPartitionedFilePath(data)
+		err := p.createNewParquetWriter(regexFilePath)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

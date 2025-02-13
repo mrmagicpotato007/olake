@@ -63,7 +63,7 @@ type Writer interface {
 	// schema update with an Alter Query
 	Normalization() bool
 	Flattener() FlattenFunction
-	EvolveSchema(bool, bool, map[string]*types.Property) error
+	EvolveSchema(bool, bool, map[string]*types.Property, types.Record) error
 	Close() error
 }
 

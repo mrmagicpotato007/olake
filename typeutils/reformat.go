@@ -3,10 +3,10 @@ package typeutils
 import (
 	"database/sql"
 	"fmt"
+	"github.com/datazip-inc/olake/types"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"strconv"
 	"time"
-
-	"github.com/datazip-inc/olake/types"
 )
 
 type StringInterface interface {
@@ -172,6 +172,8 @@ func ReformatDate(v interface{}) (time.Time, error) {
 				return time.Time{}, fmt.Errorf("empty string passed")
 			}
 			return parseStringTimestamp(*v)
+		case primitive.DateTime:
+			return v.Time(), nil
 		case *any:
 			return ReformatDate(*v)
 		}

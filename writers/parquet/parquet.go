@@ -353,6 +353,8 @@ func (p *Parquet) getPartitionedFilePath(values map[string]any) string {
 							value = timestamp.UTC().Year()
 						}
 					}
+				} else {
+					logger.Debugf("Failed to convert value to timestamp: %s", err)
 				}
 			}
 			return fmt.Sprintf("%v", value)

@@ -346,7 +346,7 @@ func (p *Parquet) getPartitionedFilePath(values map[string]any) string {
 						case "DD":
 							value = timestamp.UTC().Day()
 						case "WW":
-							value = timestamp.UTC().Weekday()
+							_, value = timestamp.UTC().ISOWeek()
 						case "MM":
 							value = timestamp.UTC().Month()
 						case "YY":

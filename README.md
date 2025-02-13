@@ -5,11 +5,11 @@
     <br>OLake
 </h1>
 
-<p align="center">Fastest open-source tool for replicating Databases to Apache Iceberg or Data Lakehouse. ⚡ Efficient, quick and scalable data ingestion for real-time analytics. Starting with MongoDB. Visit <a href="https://datazip.io/olake" target="_blank">datazip.io/olake</a> for the full documentation, and benchmarks</p>
+<p align="center">Fastest open-source tool for replicating Databases to Apache Iceberg or Data Lakehouse. ⚡ Efficient, quick and scalable data ingestion for real-time analytics. Starting with MongoDB. Visit <a href="https://olake.io/" target="_blank">olake.io/docs</a> for the full documentation, and benchmarks</p>
 
 <p align="center">
     <img alt="GitHub issues" src="https://img.shields.io/github/issues/datazip-inc/olake"> </a>
-    <a href="https://twitter.com/intent/tweet?text=Use%20the%20fastest%20open-source%20tool,%20OLake,%20for%20replicating%20Databases%20to%20S3%20and%20Apache%20Iceberg%20or%20Data%20Lakehouse.%20It%E2%80%99s%20Efficient,%20quick%20and%20scalable%20data%20ingestion%20for%20real-time%20analytics.%20Check%20at%20https://datazip.io/%20%23opensource%20%23olake%20via%20%40datazipio">
+    <a href="https://twitter.com/intent/tweet?text=Use%20the%20fastest%20open-source%20tool,%20OLake,%20for%20replicating%20Databases%20to%20S3%20and%20Apache%20Iceberg%20or%20Data%20Lakehouse.%20It%E2%80%99s%20Efficient,%20quick%20and%20scalable%20data%20ingestion%20for%20real-time%20analytics.%20Check%20at%20https://olake.io/%20%23opensource%20%23olake%20via%20%40_olake">
         <img alt="tweet" src="https://img.shields.io/twitter/url/http/shields.io.svg?style=social"></a> 
     <a href="https://join.slack.com/t/getolake/shared_invite/zt-2utw44do6-g4XuKKeqBghBMy2~LcJ4ag">
         <img alt="slack" src="https://img.shields.io/badge/Join%20Our%20Community-Slack-blue"> 
@@ -18,8 +18,8 @@
   
   
 <h3 align="center">
-  <a href="https://datazip.io/olake/docs"><b>Documentation</b></a> &bull;
-  <a href="https://twitter.com/datazipio"><b>Twitter</b></a>
+  <a href="https://olake.io/docs"><b>Documentation</b></a> &bull;
+  <a href="https://twitter.com/_olake"><b>Twitter</b></a>
 </h3>
 
 
@@ -30,9 +30,121 @@ Connector ecosystem for Olake, the key points Olake Connectors focuses on are th
 - **Connector Autonomy**
 - **Avoid operations that don't contribute to increasing record throughput**
 
+# Getting Started with OLake
 
-## Olake Framework Structure
-![diagram](/.github/assets/Olake.jpg)
+Follow the steps below to get started with OLake:
+
+1. ### Prepare Your Folder
+
+    1. Create a folder on your computer. Let’s call it `olake_folder_path`.
+        <div style="background-color: #f9f9f9; border-left: 6px solid #007bff; padding: 10px; color: black;">
+
+        💡 **Note:** In below configurations replace `olake_folder_path` with the newly created folder path.
+
+        </div>
+    2. Inside this folder, create two files:
+       - config.json: This file contains your connection details. You can find examples and instructions [here](https://github.com/datazip-inc/olake/tree/master/drivers/mongodb#config-file).
+       - writer.json: This file specifies where to save your data (local machine or S3).
+    
+    ### Example Structure of `writer.json` :
+    Example (For Local): 
+    ```json
+    {
+      "type": "PARQUET",
+         "writer": {
+           "normalization":false, // to enable/disable level one flattening
+           "local_path": "/mnt/config/{olake_reader}" // replace olake_reader with desired folder name
+      }
+    }
+    ```
+    Example (For S3):
+    ```json
+    {
+      "type": "PARQUET",
+         "writer": {
+           "normalization":false, // to enable/disable level one flattening
+           "s3_bucket": "olake",  
+           "s3_region": "",
+           "s3_access_key": "", 
+           "s3_secret_key": "", 
+           "s3_path": ""
+       }
+    }
+    ```
+2. ### Generate a Catalog File
+
+   Run the discovery process to identify your MongoDB data:  
+    ```bash
+   docker run -v olake_folder_path:/mnt/config olakego/source-mongodb:latest discover --config /mnt/config/config.json
+    ```
+    This will create a catalog.json file in your folder. The file lists the data streams from your MongoDB
+    ```json
+        {
+         "selected_streams": {
+                "namespace": [
+                    "table1",
+                    "table2"
+                ]
+            },
+            "streams": [
+                {
+                    "stream": {
+                        "name": "table1",
+                        "namespace": "namespace",
+                        // ...
+                        "sync_mode": "cdc"
+                    }
+                },
+                {
+                    "stream": {
+                        "name": "table2",
+                        "namespace": "namespace",
+                        // ...
+                        "sync_mode": "cdc"
+                    }
+                }
+            ]
+        }
+    ```
+
+    #### (Optional) Exclude Unwanted Streams
+    To exclude streams, edit catalog.json and remove them from selected_streams. <br>
+    #### Example (For Exclusion of table2) 
+    **Before**
+    ```json
+     "selected_streams": {
+        "namespace": [
+            "table1",
+            "table2"
+        ]
+     }
+    ```
+    **After Exclusion of table2**
+    ```json
+    "selected_streams": {
+        "namespace": [
+            "table1"
+        ]
+     }
+    ```
+3. ### Sync Your Data
+   Run the following command to sync data from MongoDB to your destination:
+    
+    ```bash
+   docker run -v olake_folder_path:/mnt/config olakego/source-mongodb:latest sync --config /mnt/config/config.json --catalog /mnt/config/catalog.json --destination /mnt/config/writer.json
+
+    ```
+
+4. ### sync with state: 
+   If you’ve previously synced data and want to continue from where you left off, use the state file:
+    ```bash
+    docker run -v olake_folder_path:/mnt/config olakego/source-mongodb:latest sync --config /mnt/config/config.json --catalog /mnt/config/catalog.json --destination /mnt/config/writer.json --state /mnt/config/state.json
+
+    ```
+
+For more details, refer to the [documentation](https://olake.io/docs).
+
+
 
 ## Benchmark Results: Refer this doc for complete information
 
@@ -57,7 +169,7 @@ For a collection of 230 million rows (664.81GB) from [Twitter data](https://arch
 | **Airbyte**          | 12 min 44 sec         | 1,308 r/s                 | 27.3x slower     |
 | **Debezium (Embedded)** | 12 min 44 sec       | 1,308 r/s                 | 27.3x slower     |
 
-Cost Comparison: (Considering 230 million first full load & 50 million rows incremental rows per month) as dated 30th September: Find more [here](https://datazip.io/olake/docs/olake/mongodb/benchmark).
+Cost Comparison: (Considering 230 million first full load & 50 million rows incremental rows per month) as dated 30th September: Find more [here](https://olake.io/docs/connectors/mongodb/benchmarks).
 
 
 
@@ -75,7 +187,7 @@ Virtual Machine: `Standard_D64as_v5`
   - 1 Primary Node (Master) that handles all write operations.
   - 2 Secondary Nodes (Replicas) that replicate data from the primary node.
 
-Find more [here](https://datazip.io/olake/docs/olake/mongodb/benchmark).
+Find more [here](https://olake.io/docs/connectors/mongodb/benchmarks).
 
 
 ## Components

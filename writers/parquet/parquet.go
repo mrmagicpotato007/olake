@@ -32,14 +32,14 @@ type FileMetadata struct {
 	fileName    string
 	recordCount int
 	writer      any
-	file        source.ParquetFile
+	parquetFile source.ParquetFile
 }
 
 // Parquet destination writes Parquet files to a local path and optionally uploads them to S3.
 type Parquet struct {
 	options          *protocol.Options
 	config           *Config
-	partitionFolders map[string][]FileMetadata // path -> pqFile
+	partitionedFiles map[string][]FileMetadata // path -> pqFile
 	stream           protocol.Stream
 	basePath         string
 	pqSchemaMutex    sync.Mutex // To prevent concurrent map access from fraugster library
@@ -103,10 +103,10 @@ func (p *Parquet) createNewPartitionFile(dirPath string) error {
 		return pqgo.NewGenericWriter[types.RawRecord](pqFile, pqgo.Compression(&pqgo.Snappy))
 	}()
 
-	p.partitionFolders[dirPath] = append(p.partitionFolders[dirPath], FileMetadata{
-		fileName: fileName,
-		file:     pqFile,
-		writer:   writer,
+	p.partitionedFiles[dirPath] = append(p.partitionedFiles[dirPath], FileMetadata{
+		fileName:    fileName,
+		parquetFile: pqFile,
+		writer:      writer,
 	})
 
 	return nil
@@ -116,7 +116,7 @@ func (p *Parquet) createNewPartitionFile(dirPath string) error {
 func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error {
 	p.options = options
 	p.stream = stream
-	p.partitionFolders = make(map[string][]FileMetadata)
+	p.partitionedFiles = make(map[string][]FileMetadata)
 
 	// for s3 p.config.path may not be provided
 	if p.config.Path == "" {
@@ -138,15 +138,15 @@ func (p *Parquet) Setup(stream protocol.Stream, options *protocol.Options) error
 
 // Write writes a record to the Parquet file.
 func (p *Parquet) Write(_ context.Context, record types.RawRecord) error {
-	regexFilePath := p.getPartitionedFilePath(record.Data)
+	partitionedPath := p.getPartitionedFilePath(record.Data)
 
-	partitionFolder, exists := p.partitionFolders[regexFilePath]
+	partitionFolder, exists := p.partitionedFiles[partitionedPath]
 	if !exists {
-		err := p.createNewPartitionFile(regexFilePath)
+		err := p.createNewPartitionFile(partitionedPath)
 		if err != nil {
 			return err
 		}
-		partitionFolder = p.partitionFolders[regexFilePath]
+		partitionFolder = p.partitionedFiles[partitionedPath]
 	}
 
 	if len(partitionFolder) == 0 {
@@ -225,7 +225,7 @@ func (p *Parquet) Close() error {
 		logger.Debugf("Deleted file [%s] with %d records (%s).", filePath, recordCount, reason)
 	}
 
-	for dir, openedFiles := range p.partitionFolders {
+	for dir, openedFiles := range p.partitionedFiles {
 		for _, fileMetadata := range openedFiles {
 			path := filepath.Join(dir, fileMetadata.fileName)
 
@@ -238,7 +238,7 @@ func (p *Parquet) Close() error {
 			// Close writers
 			if p.config.Normalization {
 				if err := fileMetadata.writer.(*goparquet.FileWriter).Close(); err != nil {
-					return fmt.Errorf("failed to close normalize writer: %s", err)
+					return fmt.Errorf("failed to close normalized writer: %s", err)
 				}
 			} else {
 				if err := fileMetadata.writer.(*pqgo.GenericWriter[types.RawRecord]).Close(); err != nil {
@@ -247,7 +247,7 @@ func (p *Parquet) Close() error {
 			}
 
 			// Close file
-			if err := fileMetadata.file.Close(); err != nil {
+			if err := fileMetadata.parquetFile.Close(); err != nil {
 				return fmt.Errorf("failed to close file: %s", err)
 			}
 
@@ -291,8 +291,8 @@ func (p *Parquet) Close() error {
 func (p *Parquet) EvolveSchema(change, typeChange bool, _ map[string]*types.Property, data types.Record) error {
 	if change || typeChange {
 		// create new file and append at end
-		regexFilePath := p.getPartitionedFilePath(data)
-		err := p.createNewPartitionFile(regexFilePath)
+		partitionedPath := p.getPartitionedFilePath(data)
+		err := p.createNewPartitionFile(partitionedPath)
 		if err != nil {
 			return err
 		}

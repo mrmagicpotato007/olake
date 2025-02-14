@@ -230,6 +230,7 @@ func (p *Parquet) Close() error {
 
 	for basePath, parquetFiles := range p.partitionedFiles {
 		for _, fileMetadata := range parquetFiles {
+			// TODO: Async file close and S3 upload (Good First Issue)
 			// construct full file path
 			filePath := filepath.Join(p.config.Path, basePath, fileMetadata.fileName)
 

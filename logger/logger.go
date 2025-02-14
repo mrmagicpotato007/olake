@@ -180,12 +180,13 @@ func FileLogger(content any, filePath string, fileName, fileExtension string) er
 
 func Init() {
 	// Configure lumberjack for log rotation
+	timestamp := fmt.Sprintf("%d-%d-%d_%d-%d-%d", time.Now().Year(), time.Now().Month(), time.Now().Day(), time.Now().Hour(), time.Now().Minute(), time.Now().Second())
 	rotatingFile := &lumberjack.Logger{
-		Filename:   fmt.Sprintf("%s/logs/olake.log", viper.GetString("CONFIG_FOLDER")), // Log file path
-		MaxSize:    10,                                                                 // Max size in MB before log rotation
-		MaxBackups: 5,                                                                  // Max number of old log files to retain
-		MaxAge:     30,                                                                 // Max age in days to retain old log files
-		Compress:   true,                                                               // Compress old log files
+		Filename:   fmt.Sprintf("%s/logs/sync_%s/olake.log", viper.GetString("CONFIG_FOLDER"), timestamp), // Log file path
+		MaxSize:    100,                                                                                   // Max size in MB before log rotation
+		MaxBackups: 5,                                                                                     // Max number of old log files to retain
+		MaxAge:     30,                                                                                    // Max age in days to retain old log files
+		Compress:   true,                                                                                  // Compress old log files
 	}
 	zerolog.TimestampFunc = func() time.Time {
 		return time.Now().UTC()

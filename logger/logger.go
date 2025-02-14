@@ -23,7 +23,7 @@ func Info(v ...interface{}) {
 	if len(v) == 1 {
 		logger.Info().Interface("message", v[0]).Send()
 	} else {
-		logger.Info().Msgf("%v", v...)
+		logger.Info().Msgf("%s", v...)
 	}
 }
 
@@ -34,7 +34,7 @@ func Infof(format string, v ...interface{}) {
 
 // Debug writes record into os.stdout with log level DEBUG
 func Debug(v ...interface{}) {
-	logger.Debug().Msgf("%v", v...)
+	logger.Debug().Msgf("%s", v...)
 }
 
 // Debugf writes record into os.stdout with log level DEBUG
@@ -44,12 +44,12 @@ func Debugf(format string, v ...interface{}) {
 
 // Error writes record into os.stdout with log level ERROR
 func Error(v ...interface{}) {
-	logger.Error().Msgf("%v", v...)
+	logger.Error().Msgf("%s", v...)
 }
 
 // Fatal writes record into os.stdout with log level ERROR and exits
 func Fatal(v ...interface{}) {
-	logger.Fatal().Msgf("%v", v...)
+	logger.Fatal().Msgf("%s", v...)
 	os.Exit(1)
 }
 
@@ -66,7 +66,7 @@ func Errorf(format string, v ...interface{}) {
 
 // Warn writes record into os.stdout with log level WARN
 func Warn(v ...interface{}) {
-	logger.Warn().Msgf("%v", v...)
+	logger.Warn().Msgf("%s", v...)
 }
 
 // Warn writes record into os.stdout with log level WARN
@@ -84,7 +84,7 @@ func LogSpec(spec map[string]interface{}) {
 	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(message.Spec, configFolder, "config", ".json")
 		if err != nil {
-			Fatalf("failed to create catalog file: %v", err)
+			Fatalf("failed to create spec file: %s", err)
 		}
 	}
 }
@@ -100,7 +100,7 @@ func LogCatalog(streams []*types.Stream) {
 	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(message.Catalog, configFolder, "catalog", ".json")
 		if err != nil {
-			Fatalf("failed to create catalog file: %v", err)
+			Fatalf("failed to create catalog file: %s", err)
 		}
 	}
 }
@@ -147,7 +147,7 @@ func LogState(state *types.State) {
 	if configFolder := viper.GetString("CONFIG_FOLDER"); configFolder != "" {
 		err := FileLogger(state, configFolder, "state", ".json")
 		if err != nil {
-			Fatalf("failed to create state file: %v", err)
+			Fatalf("failed to create state file: %s", err)
 		}
 	}
 }
@@ -157,7 +157,7 @@ func FileLogger(content any, filePath string, fileName, fileExtension string) er
 	// Construct the full file path
 	contentBytes, err := json.Marshal(content)
 	if err != nil {
-		return fmt.Errorf("failed to marshal content: %v", err)
+		return fmt.Errorf("failed to marshal content: %s", err)
 	}
 
 	fullPath := filepath.Join(filePath, fileName+fileExtension)
@@ -165,14 +165,14 @@ func FileLogger(content any, filePath string, fileName, fileExtension string) er
 	// Create or truncate the file
 	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to create or open file: %v", err)
+		return fmt.Errorf("failed to create or open file: %s", err)
 	}
 	defer file.Close()
 
 	// Write data to the file
 	_, err = file.Write(contentBytes)
 	if err != nil {
-		return fmt.Errorf("failed to write data to file: %v", err)
+		return fmt.Errorf("failed to write data to file: %s", err)
 	}
 
 	return nil
@@ -191,13 +191,14 @@ func Init() {
 	zerolog.TimestampFunc = func() time.Time {
 		return time.Now().UTC()
 	}
+	var currentLevel string
 	// LogColors defines ANSI color codes for log levels
 	var logColors = map[string]string{
 		"debug": "\033[36m", // Cyan
 		"info":  "\033[32m", // Green
 		"warn":  "\033[33m", // Yellow
 		"error": "\033[31m", // Red
-		"fatal": "\033[35m", // Magenta
+		"fatal": "\033[31m", // Red
 	}
 	// Create console writer
 	console := zerolog.ConsoleWriter{
@@ -205,20 +206,28 @@ func Init() {
 		TimeFormat: "2006-01-02 15:04:05",
 		FormatLevel: func(i interface{}) string {
 			level := i.(string)
+			currentLevel = level
 			color := logColors[level]
 			return fmt.Sprintf("%s%s\033[0m", color, strings.ToUpper(level))
 		},
 		FormatMessage: func(i interface{}) string {
+			msg := ""
 			switch v := i.(type) {
 			case string:
-				return v
+				msg = v
 			default:
-				msg, err := json.Marshal(v)
+				jsonMsg, err := json.Marshal(v)
 				if err != nil {
-					return fmt.Sprintf("error marshaling message: %v", err)
+					msg = fmt.Sprintf("error marshaling message: %s", err)
+				} else {
+					msg = string(jsonMsg)
 				}
-				return string(msg)
 			}
+			// Get the current log level from the context
+			if currentLevel == zerolog.ErrorLevel.String() || currentLevel == zerolog.FatalLevel.String() {
+				msg = fmt.Sprintf("\033[31m%s\033[0m", msg) // Make entire message red for error level
+			}
+			return msg
 		},
 		FormatTimestamp: func(i interface{}) string {
 			return fmt.Sprintf("\033[90m%s\033[0m", i)

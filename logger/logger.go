@@ -220,9 +220,8 @@ func Init() {
 				if err != nil {
 					Errorf("failed to marshal log message: %s", err)
 					return err.Error()
-				} else {
-					return string(jsonMsg)
 				}
+				return string(jsonMsg)
 			}
 			// Get the current log level from the context
 			if currentLevel == zerolog.ErrorLevel.String() || currentLevel == zerolog.FatalLevel.String() {

@@ -79,8 +79,8 @@ var syncCmd = &cobra.Command{
 
 		// create a map for namespace and streamMetadata
 		selectedStreamsMap := make(map[string]types.StreamMetadata)
-		for namespace, streamNames := range catalog.SelectedStreams {
-			for _, streamMetadata := range streamNames {
+		for namespace, streamsMetadata := range catalog.SelectedStreams {
+			for _, streamMetadata := range streamsMetadata {
 				selectedStreamsMap[fmt.Sprintf("%s.%s", namespace, streamMetadata.StreamName)] = streamMetadata
 			}
 		}

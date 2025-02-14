@@ -191,30 +191,22 @@ func MaxDate(v1, v2 time.Time) time.Time {
 	return v2
 }
 
-func ULID() (string, error) {
+func ULID() string {
 	return genULID(time.Now())
 }
 
-func genULID(t time.Time) (string, error) {
+func genULID(t time.Time) string {
 	ulidMutex.Lock()
 	defer ulidMutex.Unlock()
-
-	newUlid, err := ulid.New(ulid.Timestamp(t), entropy)
-	if err != nil {
-		return "", err
-	}
-
-	return newUlid.String(), nil
+	// TODO: Handle Error (Need to remove state and catalog print from logger)
+	newUlid, _ := ulid.New(ulid.Timestamp(t), entropy)
+	return newUlid.String()
 }
 
 // Returns a timestamped
 func TimestampedFileName(extension string) string {
 	now := time.Now()
-	ulid, err := genULID(now)
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%d-%d-%d_%d-%d-%d_%s.%s", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), ulid, extension)
+	return fmt.Sprintf("%d-%d-%d_%d-%d-%d_%s.%s", now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second(), genULID(now), extension)
 }
 
 func IsJSON(str string) bool {

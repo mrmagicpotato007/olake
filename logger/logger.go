@@ -218,9 +218,10 @@ func Init() {
 			default:
 				jsonMsg, err := json.Marshal(v)
 				if err != nil {
-					msg = fmt.Sprintf("error marshaling message: %s", err)
+					Errorf("failed to marshal log message: %s", err)
+					return err.Error()
 				} else {
-					msg = string(jsonMsg)
+					return string(jsonMsg)
 				}
 			}
 			// Get the current log level from the context

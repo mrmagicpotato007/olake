@@ -43,6 +43,7 @@ var RootCmd = &cobra.Command{
 		if !noSave {
 			viper.Set("CONFIG_FOLDER", filepath.Dir(configPath))
 		}
+		// logger uses CONFIG_FOLDER
 		logger.Init()
 
 		if len(args) == 0 {

@@ -224,7 +224,6 @@ func Init() {
 			return fmt.Sprintf("\033[90m%s\033[0m", i)
 		},
 	}
-
 	// Create a multiwriter to log both console and file
 	multiwriter := zerolog.MultiLevelWriter(console, rotatingFile)
 

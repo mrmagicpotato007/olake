@@ -30,7 +30,7 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 		// chunks state not present means full load
 		logger.Infof("starting full load for stream [%s]", stream.ID())
 
-		totalCount, err := m.totalCountInCollection(collection)
+		totalCount, err := m.totalCountInCollection(backfillCtx, collection)
 		if err != nil {
 			return err
 		}
@@ -127,7 +127,7 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 		return base.RetryOnBackoff(m.config.RetryCount, 1*time.Minute, cursorIterationFunc)
 	}
 
-	return utils.Concurrent(context.TODO(), chunks.Array(), m.config.MaxThreads, func(ctx context.Context, one types.Chunk, number int) error {
+	return utils.Concurrent(backfillCtx, chunks.Array(), m.config.MaxThreads, func(ctx context.Context, one types.Chunk, number int) error {
 		err := processChunk(backfillCtx, pool, stream, collection, one.Min, &one.Max)
 		if err != nil {
 			return err
@@ -138,14 +138,14 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 	})
 }
 
-func (m *Mongo) totalCountInCollection(collection *mongo.Collection) (int64, error) {
+func (m *Mongo) totalCountInCollection(ctx context.Context, collection *mongo.Collection) (int64, error) {
 	var countResult bson.M
 	command := bson.D{{
 		Key:   "collStats",
 		Value: collection.Name(),
 	}}
 	// Select the database
-	err := collection.Database().RunCommand(context.TODO(), command).Decode(&countResult)
+	err := collection.Database().RunCommand(ctx, command).Decode(&countResult)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total count: %s", err)
 	}

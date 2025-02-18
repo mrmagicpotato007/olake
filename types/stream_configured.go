@@ -137,7 +137,7 @@ func (s *ConfiguredStream) SetStateChunks(chunks *Set[Chunk]) {
 
 // remove chunk
 func (s *ConfiguredStream) RemoveStateChunk(chunk Chunk) {
-	// locking global state so that marshalling call not happen on streamState while writing
+	// locking global state so that marshaling call not happen on streamState while writing
 	// example: logState can be called from anywhere which marshal the streamState
 	s.globalState.Lock()
 	s.streamState.Lock()

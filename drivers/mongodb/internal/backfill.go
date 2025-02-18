@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/datazip-inc/olake/constants"
+	"github.com/datazip-inc/olake/drivers/base"
 	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
@@ -23,6 +24,7 @@ import (
 func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) error {
 	collection := m.client.Database(stream.Namespace(), options.Database().SetReadConcern(readconcern.Majority())).Collection(stream.Name())
 	chunks := stream.GetStateChunks()
+	backfillCtx := context.TODO()
 	if chunks == nil || chunks.Len() == 0 {
 		chunks = types.NewSet[types.Chunk]()
 		// chunks state not present means full load
@@ -84,13 +86,6 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 			end = &max
 		}
 
-		opts := options.Aggregate().SetAllowDiskUse(true).SetBatchSize(int32(math.Pow10(6)))
-		cursor, err := collection.Aggregate(ctx, generatepipeline(start, end), opts)
-		if err != nil {
-			return fmt.Errorf("collection.Find: %s", err)
-		}
-		defer cursor.Close(ctx)
-
 		waitChannel := make(chan error, 1)
 		insert, err := pool.NewThread(threadContext, stream, protocol.WithWaitChannel(waitChannel))
 		if err != nil {
@@ -102,32 +97,38 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 			err = <-waitChannel
 		}()
 
-		for cursor.Next(ctx) {
-			var doc bson.M
-			if _, err = cursor.Current.LookupErr("_id"); err != nil {
-				return fmt.Errorf("looking up idProperty: %s", err)
-			} else if err = cursor.Decode(&doc); err != nil {
-				return fmt.Errorf("backfill decoding document: %s", err)
-			}
-
-			handleObjectID(doc)
-			exit, err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
+		opts := options.Aggregate().SetAllowDiskUse(true).SetBatchSize(int32(math.Pow10(6)))
+		cursorIterationFunc := func() error {
+			cursor, err := collection.Aggregate(ctx, generatepipeline(start, end), opts)
 			if err != nil {
-				return fmt.Errorf("failed to finish backfill chunk: %s", err)
+				return fmt.Errorf("collection.Find: %s", err)
 			}
-			if exit {
-				return nil
-			}
-		}
+			defer cursor.Close(ctx)
 
-		if err := cursor.Err(); err != nil {
-			return err
+			for cursor.Next(ctx) {
+				var doc bson.M
+				if _, err = cursor.Current.LookupErr("_id"); err != nil {
+					return fmt.Errorf("looking up idProperty: %s", err)
+				} else if err = cursor.Decode(&doc); err != nil {
+					return fmt.Errorf("backfill decoding document: %s", err)
+				}
+
+				handleObjectID(doc)
+				exit, err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
+				if err != nil {
+					return fmt.Errorf("failed to finish backfill chunk: %s", err)
+				}
+				if exit {
+					return nil
+				}
+			}
+			return cursor.Err()
 		}
-		return nil
+		return base.RetryOnBackoff(m.config.RetryCount, 1*time.Minute, cursorIterationFunc)
 	}
 
-	return utils.Concurrent(context.TODO(), chunks.Array(), chunks.Len(), func(ctx context.Context, one types.Chunk, number int) error {
-		err := processChunk(ctx, pool, stream, collection, one.Min, &one.Max)
+	return utils.Concurrent(context.TODO(), chunks.Array(), m.config.MaxThreads, func(ctx context.Context, one types.Chunk, number int) error {
+		err := processChunk(backfillCtx, pool, stream, collection, one.Min, &one.Max)
 		if err != nil {
 			return err
 		}

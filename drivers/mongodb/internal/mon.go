@@ -56,9 +56,12 @@ func (m *Mongo) Setup() error {
 	// no need to check from discover if it have cdc support or not
 	m.CDCSupport = true
 	// check for default backoff count
-	if m.config.RetryCount == 0 {
+	if m.config.RetryCount < 0 {
 		logger.Info("setting backoff retry count to default value %d", defaultBackoffCount)
 		m.config.RetryCount = defaultBackoffCount
+	} else {
+		// add 1 for first run
+		m.config.RetryCount += 1
 	}
 	return nil
 }

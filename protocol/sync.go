@@ -52,11 +52,9 @@ var syncCmd = &cobra.Command{
 			}
 		}
 
-		// TODO: state formatting
-		logger.Infof("Running sync with state: %v", state)
-
 		state.Mutex = &sync.Mutex{}
-
+		stateBytes, _ := state.MarshalJSON()
+		logger.Infof("Running sync with state: %s", stateBytes)
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -77,11 +75,11 @@ var syncCmd = &cobra.Command{
 
 		streamsMap := types.StreamsToMap(streams...)
 
-		// create a map for namespace and name
-		selectedStreamsMap := make(map[string]bool)
-		for namespace, streamNames := range catalog.SelectedStreams {
-			for _, name := range streamNames {
-				selectedStreamsMap[fmt.Sprintf("%s.%s", namespace, name)] = true
+		// create a map for namespace and streamMetadata
+		selectedStreamsMap := make(map[string]types.StreamMetadata)
+		for namespace, streamsMetadata := range catalog.SelectedStreams {
+			for _, streamMetadata := range streamsMetadata {
+				selectedStreamsMap[fmt.Sprintf("%s.%s", namespace, streamMetadata.StreamName)] = streamMetadata
 			}
 		}
 
@@ -91,8 +89,9 @@ var syncCmd = &cobra.Command{
 		standardModeStreams := []Stream{}
 		_, _ = utils.ArrayContains(catalog.Streams, func(elem *types.ConfiguredStream) bool {
 
+			sMetadata, selected := selectedStreamsMap[fmt.Sprintf("%s.%s", elem.Namespace(), elem.Name())]
 			// Check if the stream is in the selectedStreamMap
-			if catalog.SelectedStreams != nil && !selectedStreamsMap[fmt.Sprintf("%s.%s", elem.Namespace(), elem.Name())] {
+			if !(catalog.SelectedStreams == nil || selected) {
 				logger.Warnf("Skipping stream %s.%s; not in selected streams.", elem.Name(), elem.Namespace())
 				return false
 			}
@@ -110,7 +109,9 @@ var syncCmd = &cobra.Command{
 			}
 
 			elem.SetupState(state)
+			elem.StreamMetadata = sMetadata
 			selectedStreams = append(selectedStreams, elem.ID())
+
 			if elem.Stream.SyncMode == types.CDC {
 				cdcStreams = append(cdcStreams, elem)
 			} else {
@@ -131,11 +132,6 @@ var syncCmd = &cobra.Command{
 				}
 
 				logger.Info("Starting ChangeStream process in driver")
-
-				// Setup Global State from Connector
-				if err := driver.SetupGlobalState(state); err != nil {
-					return err
-				}
 
 				err := driver.RunChangeStream(pool, cdcStreams...)
 				if err != nil {
@@ -172,9 +168,7 @@ var syncCmd = &cobra.Command{
 		}
 
 		logger.Infof("Total records read: %d", pool.TotalRecords())
-		if !state.IsZero() {
-			logger.LogState(state)
-		}
+		state.LogState()
 
 		return nil
 	},

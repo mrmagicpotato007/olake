@@ -6,16 +6,15 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/datazip-inc/olake/logger"
 	"github.com/goccy/go-json"
 	"github.com/oklog/ulid"
-	"github.com/sirupsen/logrus"
 
 	"github.com/spf13/cobra"
 )
@@ -143,7 +142,7 @@ func UnmarshalFile(file string, dest any) error {
 
 	err = json.Unmarshal(data, dest)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal file[%s]: %s", file, err)
 	}
 
 	return nil
@@ -200,12 +199,11 @@ func ULID() string {
 func genULID(t time.Time) string {
 	ulidMutex.Lock()
 	defer ulidMutex.Unlock()
-
+	// TODO: Handle Error (Need to remove state and catalog print from logger)
 	newUlid, err := ulid.New(ulid.Timestamp(t), entropy)
 	if err != nil {
-		logrus.Fatal(err)
+		logger.Fatalf("failed to generate ulid: %s", err)
 	}
-
 	return newUlid.String()
 }
 
@@ -241,30 +239,4 @@ func GetHash(m map[string]interface{}) string {
 	}
 
 	return GetKeysHash(m, keys...)
-}
-
-// CreateFile creates a new file or overwrites an existing one with the specified filename, path, extension,
-func CreateFile(content any, filePath string, fileName, fileExtension string) error {
-	// Construct the full file path
-	contentBytes, err := json.Marshal(content)
-	if err != nil {
-		return fmt.Errorf("failed to marshal content: %v", err)
-	}
-
-	fullPath := filepath.Join(filePath, fileName+fileExtension)
-
-	// Create or truncate the file
-	file, err := os.OpenFile(fullPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to create or open file: %v", err)
-	}
-	defer file.Close()
-
-	// Write data to the file
-	_, err = file.Write(contentBytes)
-	if err != nil {
-		return fmt.Errorf("failed to write data to file: %v", err)
-	}
-
-	return nil
 }

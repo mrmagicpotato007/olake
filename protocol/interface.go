@@ -61,11 +61,9 @@ type Writer interface {
 	// ReInitiationRequiredOnSchemaEvolution is implemented by Writers incase the writer needs to be re-initialized
 	// such as when writing parquet files, but in destinations like Kafka/Clickhouse/BigQuery they can handle
 	// schema update with an Alter Query
-	ReInitiationOnTypeChange() bool
-	ReInitiationOnNewColumns() bool
 	Normalization() bool
 	Flattener() FlattenFunction
-	EvolveSchema(map[string]*types.Property) error
+	EvolveSchema(bool, bool, map[string]*types.Property, types.Record) error
 	Close() error
 }
 
@@ -85,9 +83,11 @@ type Stream interface {
 	SetStateCursor(value any)
 	SetStateKey(key string, value any)
 	Validate(source *types.Stream) error
+	SetStateChunks(chunks *types.Set[types.Chunk])
+	GetStateChunks() *types.Set[types.Chunk]
+	RemoveStateChunk(chunk types.Chunk)
 }
 
 type State interface {
 	SetType(typ types.StateType)
-	IsZero() bool
 }

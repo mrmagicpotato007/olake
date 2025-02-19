@@ -224,7 +224,6 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 		}
 		rowCount++
 	}
-
 	// Process column information
 	for rows.Next() {
 		var columnName, dataType, isNullable, columnKey string
@@ -247,16 +246,9 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	return stream, nil
 }
 
-// Additional methods for backfill and changeStreamSync would need to be implemented
-// These are placeholders to complete the interface
-func (m *MySQL) backfill(_ protocol.Stream, _ *protocol.WriterPool) error {
-	// Implement full table refresh logic
-	return nil
-}
-
-func (m *MySQL) changeStreamSync(_ protocol.Stream, _ *protocol.WriterPool) error {
-	// Implement change data capture (CDC) logic
-	return nil
+func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPool) error {
+	// Call backfill function for change data capture (CDC) logic
+	return m.backfill(stream, pool)
 }
 func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
 	// TODO: concurrency based on configuration

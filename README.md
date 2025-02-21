@@ -280,7 +280,9 @@ You can find docs at https://olake.io/docs. If you need any clarification or fin
 
 ## Community
 
-Join the [slack community](https://olake.io/slack) to know more about OLake, future roadmaps, about Data Lakes and Lakehouses, the Data Engineering Ecosystem and to connect with other users and contributors.
+Join the [slack community](https://olake.io/slack) to know more about OLake, future roadmaps and community meetups, about Data Lakes and Lakehouses, the Data Engineering Ecosystem and to connect with other users and contributors.
+
+Checkout [OLake Roadmap](https://olake.io/docs/roadmap) to track and influence the way we build it, your expert opinion is always welcomed for us to build a best class open source offering in Data space.
 
 If you have any ideas, questions, or any feedback, please share on our [Github Discussions](https://github.com/datazip-inc/olake/discussions) or raise an issue.
 

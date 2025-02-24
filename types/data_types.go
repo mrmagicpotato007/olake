@@ -28,13 +28,16 @@ type RawRecord struct {
 	Data           map[string]any `parquet:"data,json"`
 	DeleteTime     int64          `parquet:"cdc_deleted_at"`
 	OlakeTimestamp int64          `parquet:"olake_insert_time"`
+	OperationType  string         `parquet:"_"`
+	CdcTimestamp   int64          `parquet:"_"`
 }
 
-func CreateRawRecord(olakeID string, data map[string]any, deleteAt int64) RawRecord {
+func CreateRawRecord(olakeID string, data map[string]any, deleteAt int64, operationType string, cdcTimestamp int64) RawRecord {
 	return RawRecord{
-		OlakeID:    olakeID,
-		Data:       data,
-		DeleteTime: deleteAt,
+		OlakeID:       olakeID,
+		Data:          data,
+		OperationType: operationType,
+		CdcTimestamp:  cdcTimestamp,
 	}
 }
 

@@ -14,9 +14,13 @@ var ReaderPool struct {
 	semaphore chan struct{} // Limits concurrent operations across all streams
 	once      sync.Once     // Ensures one-time initialization of the pool
 	mutex     sync.Mutex    // Protects access during initialization
-	active    atomic.Int64  // Tracks currently running operations
-	waiting   atomic.Int64  // Tracks operations waiting in queue
-	total     atomic.Int64  // Counts total completed operations
+
+	// The following counters are maintained for monitoring purposes only.
+	// They can be exposed via metrics collectors or debugging tools without
+	// adding runtime logging overhead.
+	active  atomic.Int64 // Tracks currently running operations
+	waiting atomic.Int64 // Tracks operations waiting in queue
+	total   atomic.Int64 // Counts total completed operations
 }
 
 // InitReaderPool initializes the global reader pool with the specified concurrency limit.
@@ -54,29 +58,20 @@ func ConcurrentReader[T any](ctx context.Context, array []T, concurrency int,
 	for idx, one := range array {
 		idx, one := idx, one // capture
 		executor.Go(func() error {
-			// TODO: Consider removing or reducing these debug logs before production release
-			// They are useful for development but may generate excessive log volume in production
-
 			// Increment waiting counter
-			waiting := ReaderPool.waiting.Add(1)
-			logger.Debugf("Chunk waiting for queue slot. Active: %d, Waiting: %d, Total: %d",
-				ReaderPool.active.Load(), waiting, ReaderPool.total.Load())
+			ReaderPool.waiting.Add(1)
 
 			// Acquire global semaphore
 			select {
 			case ReaderPool.semaphore <- struct{}{}:
 				// Decrement waiting, increment active
 				ReaderPool.waiting.Add(-1)
-				active := ReaderPool.active.Add(1)
-				logger.Debugf("Chunk started execution. Active: %d, Waiting: %d, Total: %d",
-					active, ReaderPool.waiting.Load(), ReaderPool.total.Load())
+				ReaderPool.active.Add(1)
 
 				defer func() {
 					<-ReaderPool.semaphore
-					active := ReaderPool.active.Add(-1)
-					total := ReaderPool.total.Add(1)
-					logger.Debugf("Chunk completed execution. Active: %d, Waiting: %d, Total: %d",
-						active, ReaderPool.waiting.Load(), total)
+					ReaderPool.active.Add(-1)
+					ReaderPool.total.Add(1)
 				}()
 			case <-ctx.Done():
 				ReaderPool.waiting.Add(-1)

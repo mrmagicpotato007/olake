@@ -11,12 +11,12 @@ import (
 
 // Global pool for controlling total concurrent database operations
 var ReaderPool struct {
-	semaphore chan struct{}
-	once      sync.Once
-	mutex     sync.Mutex
-	active    atomic.Int64
-	waiting   atomic.Int64
-	total     atomic.Int64
+	semaphore chan struct{} // Limits concurrent operations across all streams
+	once      sync.Once     // Ensures one-time initialization of the pool
+	mutex     sync.Mutex    // Protects access during initialization
+	active    atomic.Int64  // Tracks currently running operations
+	waiting   atomic.Int64  // Tracks operations waiting in queue
+	total     atomic.Int64  // Counts total completed operations
 }
 
 // InitReaderPool initializes the global reader pool with the specified concurrency limit.

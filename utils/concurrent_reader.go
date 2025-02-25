@@ -13,7 +13,6 @@ import (
 var ReaderPool struct {
 	semaphore chan struct{} // Limits concurrent operations across all streams
 	once      sync.Once     // Ensures one-time initialization of the pool
-	mutex     sync.Mutex    // Protects access during initialization
 
 	// The following counters are maintained for monitoring purposes only.
 	// They can be exposed via metrics collectors or debugging tools without

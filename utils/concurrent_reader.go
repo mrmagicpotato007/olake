@@ -19,7 +19,14 @@ var ReaderPool struct {
 	total     atomic.Int64
 }
 
-// InitReaderPool initializes the global reader pool with the specified concurrency limit
+// InitReaderPool initializes the global reader pool with the specified concurrency limit.
+// This function should be called during application startup to ensure a consistent
+// concurrency limit is used. If not called explicitly, the pool will be initialized
+// with the concurrency value from the first ConcurrentReader call.
+//
+// Important: Only the first initialization (either explicit via this function or implicit
+// via ConcurrentReader) will set the concurrency limit. Subsequent calls with different
+// concurrency values will have no effect on the pool size.
 func InitReaderPool(maxConcurrent int) {
 	ReaderPool.once.Do(func() {
 		ReaderPool.semaphore = make(chan struct{}, maxConcurrent)
@@ -28,17 +35,19 @@ func InitReaderPool(maxConcurrent int) {
 }
 
 // ConcurrentReader executes database read operations with a global concurrency limit
-// to prevent database connection overload across multiple streams
+// to prevent database connection overload across multiple streams.
+//
+// Note: If the global reader pool hasn't been initialized via InitReaderPool(),
+// this function will initialize it with the provided concurrency parameter.
+// Only the first initialization will take effect.
 func ConcurrentReader[T any](ctx context.Context, array []T, concurrency int,
 	execute func(ctx context.Context, one T, executionNumber int) error) error {
 
 	// Initialize global pool if needed
-	ReaderPool.mutex.Lock()
-	if ReaderPool.semaphore == nil {
+	ReaderPool.once.Do(func() {
 		ReaderPool.semaphore = make(chan struct{}, concurrency)
 		logger.Infof("Initialized global reader pool with max concurrent: %d", concurrency)
-	}
-	ReaderPool.mutex.Unlock()
+	})
 
 	executor, ctx := errgroup.WithContext(ctx)
 

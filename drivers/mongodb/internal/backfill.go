@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"time"
 
 	"github.com/datazip-inc/olake/constants"
+	"github.com/datazip-inc/olake/drivers/base"
 	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
@@ -20,112 +22,137 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readconcern"
 )
 
-type Boundry struct {
-	StartID primitive.ObjectID  `json:"start"`
-	EndID   *primitive.ObjectID `json:"end"`
-	end     time.Time
-}
-
 func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) error {
-	logger.Infof("starting full load for stream [%s]", stream.ID())
-
 	collection := m.client.Database(stream.Namespace(), options.Database().SetReadConcern(readconcern.Majority())).Collection(stream.Name())
-	totalCount, err := m.totalCountInCollection(collection)
-	if err != nil {
-		return err
-	}
+	chunks := stream.GetStateChunks()
+	backfillCtx := context.TODO()
+	var chunksArray []types.Chunk
+	if chunks == nil || chunks.Len() == 0 {
+		chunks = types.NewSet[types.Chunk]()
+		// chunks state not present means full load
+		logger.Infof("starting full load for stream [%s]", stream.ID())
 
-	first, last, err := m.fetchExtremes(collection)
-	if err != nil {
-		return err
-	}
-
-	logger.Infof("Extremes of Stream %s are start: %s \t end:%s", stream.ID(), first, last)
-	logger.Infof("Total expected count for stream %s are %d", stream.ID(), totalCount)
-
-	timeDiff := last.Sub(first).Hours() / 6
-	if timeDiff < 1 {
-		timeDiff = 1
-	}
-	// for every 6hr difference ideal density is 10 Seconds
-	density := time.Duration(timeDiff) * (10 * time.Second)
-	return utils.ConcurrentC(context.TODO(), utils.Yield(func(prev *Boundry) (bool, *Boundry, error) {
-		start := first
-		if prev != nil {
-			start = prev.end
-		}
-		boundry := &Boundry{
-			StartID: *generateMinObjectID(start),
-		}
-
-		end := start.Add(density)
-		exit := true
-		if !end.After(last) {
-			exit = false
-			boundry.EndID = generateMinObjectID(end)
-			boundry.end = end
-		} else {
-			logger.Info("Scheduling last full load chunk query!")
-		}
-
-		return exit, boundry, nil
-	}), m.config.MaxThreads, func(ctx context.Context, one *Boundry, number int64) error {
-		threadContext, cancelThread := context.WithCancel(ctx)
-		defer cancelThread()
-
-		opts := options.Aggregate().SetAllowDiskUse(true).SetBatchSize(int32(math.Pow10(6)))
-		cursor, err := collection.Aggregate(ctx, generatepipeline(one.StartID, one.EndID), opts)
-		if err != nil {
-			return fmt.Errorf("collection.Find: %s", err)
-		}
-		defer cursor.Close(ctx)
-
-		waitChannel := make(chan struct{})
-		defer func() {
-			if stream.GetSyncMode() == types.CDC {
-				// only wait in cdc mode
-				// make sure it get called after insert.Close()
-				<-waitChannel
-			}
-			logger.Infof("Finished full load chunk number %d.", number)
-		}()
-
-		insert, err := pool.NewThread(threadContext, stream, protocol.WithNumber(number), protocol.WithWaitChannel(waitChannel))
+		totalCount, err := m.totalCountInCollection(backfillCtx, collection)
 		if err != nil {
 			return err
 		}
-		defer insert.Close()
 
-		for cursor.Next(ctx) {
-			var doc bson.M
-			if _, err = cursor.Current.LookupErr("_id"); err != nil {
-				return fmt.Errorf("looking up idProperty: %s", err)
-			} else if err = cursor.Decode(&doc); err != nil {
-				return fmt.Errorf("backfill decoding document: %s", err)
-			}
-
-			handleObjectID(doc)
-			exit, err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
-			if err != nil {
-				return fmt.Errorf("failed to finish backfill chunk %d: %s", number, err)
-			}
-			if exit {
-				return nil
-			}
+		first, last, err := m.fetchExtremes(collection)
+		if err != nil {
+			return err
 		}
-		return cursor.Err()
-	})
 
+		logger.Infof("Extremes of Stream %s are start: %s \t end:%s", stream.ID(), first, last)
+		logger.Infof("Total expected count for stream %s are %d", stream.ID(), totalCount)
+		pool.AddRecordsToSync(totalCount)
+		timeDiff := last.Sub(first).Hours() / 6
+		if timeDiff < 1 {
+			timeDiff = 1
+		}
+		// for every 6hr difference ideal density is 10 Seconds
+		density := time.Duration(timeDiff) * (10 * time.Second)
+		start := first
+		for start.Before(last) {
+			end := start.Add(density)
+			minObjectID := generateMinObjectID(start)
+			maxObjecID := generateMinObjectID(end)
+			if end.After(last) {
+				maxObjecID = generateMinObjectID(last.Add(time.Second))
+			}
+			start = end
+			chunks.Insert(types.Chunk{
+				Min: minObjectID,
+				Max: maxObjecID,
+			})
+		}
+		// save the chunks state
+		stream.SetStateChunks(chunks)
+		chunksArray = chunks.Array()
+	} else {
+		// TODO: to get estimated time need to update pool.AddRecordsToSync(totalCount) (Can be done via storing some vars in state)
+		rawChunkArray := chunks.Array()
+		// convert to premitive.ObjectID
+		for _, chunk := range rawChunkArray {
+			premitiveMinID, _ := primitive.ObjectIDFromHex(chunk.Min.(string))
+			premitiveMaxID, _ := primitive.ObjectIDFromHex(chunk.Max.(string))
+			chunksArray = append(chunksArray, types.Chunk{
+				Min: &premitiveMinID,
+				Max: &premitiveMaxID,
+			})
+		}
+	}
+
+	logger.Infof("Running backfill for %d chunks", chunks.Len())
+	// notice: err is declared in return, reason: defer call can access it
+	processChunk := func(ctx context.Context, chunk types.Chunk, _ int) (err error) {
+		threadContext, cancelThread := context.WithCancel(ctx)
+		defer cancelThread()
+
+		waitChannel := make(chan error, 1)
+		insert, err := pool.NewThread(threadContext, stream, protocol.WithWaitChannel(waitChannel))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			insert.Close()
+			// wait for chunk completion
+			err = <-waitChannel
+		}()
+
+		opts := options.Aggregate().SetAllowDiskUse(true).SetBatchSize(int32(math.Pow10(6)))
+		cursorIterationFunc := func() error {
+			cursor, err := collection.Aggregate(ctx, generatepipeline(chunk.Min, chunk.Max), opts)
+			if err != nil {
+				return fmt.Errorf("collection.Find: %s", err)
+			}
+			defer cursor.Close(ctx)
+
+			for cursor.Next(ctx) {
+				var doc bson.M
+				if _, err = cursor.Current.LookupErr("_id"); err != nil {
+					return fmt.Errorf("looking up idProperty: %s", err)
+				} else if err = cursor.Decode(&doc); err != nil {
+					return fmt.Errorf("backfill decoding document: %s", err)
+				}
+
+				handleObjectID(doc)
+				exit, err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
+				if err != nil {
+					return fmt.Errorf("failed to finish backfill chunk: %s", err)
+				}
+				if exit {
+					return nil
+				}
+			}
+			return cursor.Err()
+		}
+		return base.RetryOnBackoff(m.config.RetryCount, 1*time.Minute, cursorIterationFunc)
+	}
+	// note: there are performance issues with mongodb if chunks are not sorted
+	sort.Slice(chunksArray, func(i, j int) bool {
+		return chunksArray[i].Min.(*primitive.ObjectID).Hex() < chunksArray[j].Min.(*primitive.ObjectID).Hex()
+	})
+	return utils.Concurrent(backfillCtx, chunksArray, m.config.MaxThreads, func(ctx context.Context, one types.Chunk, number int) error {
+		batchStartTime := time.Now()
+		err := processChunk(backfillCtx, one, number)
+		if err != nil {
+			return err
+		}
+		// remove success chunk from state
+		stream.RemoveStateChunk(one)
+		logger.Debugf("finished %d chunk[%s-%s] in %0.2f seconds", number, one.Min, one.Max, time.Since(batchStartTime).Seconds())
+		return nil
+	})
 }
 
-func (m *Mongo) totalCountInCollection(collection *mongo.Collection) (int64, error) {
+func (m *Mongo) totalCountInCollection(ctx context.Context, collection *mongo.Collection) (int64, error) {
 	var countResult bson.M
 	command := bson.D{{
 		Key:   "collStats",
 		Value: collection.Name(),
 	}}
 	// Select the database
-	err := collection.Database().RunCommand(context.TODO(), command).Decode(&countResult)
+	err := collection.Database().RunCommand(ctx, command).Decode(&countResult)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get total count: %s", err)
 	}
@@ -169,7 +196,7 @@ func (m *Mongo) fetchExtremes(collection *mongo.Collection) (time.Time, time.Tim
 	return start, end, nil
 }
 
-func generatepipeline(start primitive.ObjectID, end *primitive.ObjectID) mongo.Pipeline {
+func generatepipeline(start, end any) mongo.Pipeline {
 	andOperation := bson.A{
 		bson.D{
 			{
@@ -197,7 +224,7 @@ func generatepipeline(start primitive.ObjectID, end *primitive.ObjectID) mongo.P
 			Key: "_id",
 			Value: bson.D{{
 				Key:   "$lt",
-				Value: *end,
+				Value: end,
 			}},
 		}})
 	}

@@ -22,9 +22,9 @@ type CloseFunction func()
 var RegisteredWriters = map[types.AdapterType]NewFunc{}
 
 type Options struct {
-	Identifier  string
-	Number      int64
-	WaitChannel chan struct{}
+	Identifier   string
+	Number       int64
+	errorChannel chan error
 }
 
 type ThreadOptions func(opt *Options)
@@ -41,13 +41,14 @@ func WithNumber(number int64) ThreadOptions {
 	}
 }
 
-func WithWaitChannel(waitChannel chan struct{}) ThreadOptions {
+func WithWaitChannel(errChan chan error) ThreadOptions {
 	return func(opt *Options) {
-		opt.WaitChannel = waitChannel
+		opt.errorChannel = errChan
 	}
 }
 
 type WriterPool struct {
+	totalRecords  atomic.Int64
 	recordCount   atomic.Int64
 	threadCounter atomic.Int64 // Used in naming files in S3 and global count for threads
 	config        any          // respective writer config
@@ -76,6 +77,7 @@ func NewWriter(ctx context.Context, config *types.WriterConfig) (*WriterPool, er
 
 	group, ctx := errgroup.WithContext(ctx)
 	return &WriterPool{
+		totalRecords:  atomic.Int64{},
 		recordCount:   atomic.Int64{},
 		threadCounter: atomic.Int64{},
 		config:        config.WriterConfig,
@@ -141,16 +143,9 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 			w.tmu.Lock()
 			stream.Schema().Override(fields.ToProperties()) // update the schema in Stream
 			w.tmu.Unlock()
-			if (typeChange && thread.ReInitiationOnTypeChange()) || (change && thread.ReInitiationOnNewColumns()) {
-				thread.Close()
-				if err := initNewWriter(); err != nil { // init new writer
-					return nil, err
-				}
-			} else {
-				err := thread.EvolveSchema(mutations.ToProperties())
-				if err != nil {
-					return nil, fmt.Errorf("failed to evolve schema: %s", err)
-				}
+			err := thread.EvolveSchema(change, typeChange, mutations.ToProperties(), flattenedData)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evolve schema: %s", err)
 			}
 		}
 		err = typeutils.ReformatRecord(fields, flattenedData)
@@ -164,12 +159,12 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 		err := func() error {
 			w.threadCounter.Add(1)
 			defer func() {
-				childCancel()  // no more inserts
-				thread.Close() // close it after closing inserts
+				childCancel() // no more inserts
 				// if wait channel is provided, close it
-				if opts.WaitChannel != nil {
-					close(opts.WaitChannel)
+				if opts.errorChannel != nil {
+					close(opts.errorChannel)
 				}
+				thread.Close() // close it after closing inserts
 				w.threadCounter.Add(-1)
 			}()
 			// init writer first
@@ -181,7 +176,7 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 				for {
 					select {
 					case <-parent.Done():
-						return parent.Err()
+						return nil
 					default:
 						record, ok := <-recordChan
 						if !ok {
@@ -203,10 +198,8 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 						}
 						w.recordCount.Add(1) // increase the record count
 
-						if w.TotalRecords()%batchSize == 0 {
-							if !state.IsZero() {
-								logger.LogState(state)
-							}
+						if w.SyncedRecords()%batchSize == 0 {
+							state.LogState()
 						}
 					}
 				}
@@ -234,8 +227,16 @@ func (w *WriterPool) NewThread(parent context.Context, stream Stream, options ..
 }
 
 // Returns total records fetched at runtime
-func (w *WriterPool) TotalRecords() int64 {
+func (w *WriterPool) SyncedRecords() int64 {
 	return w.recordCount.Load()
+}
+
+func (w *WriterPool) AddRecordsToSync(recordCount int64) {
+	w.totalRecords.Add(recordCount)
+}
+
+func (w *WriterPool) GetRecordsToSync() int64 {
+	return w.totalRecords.Load()
 }
 
 func (w *WriterPool) Wait() error {

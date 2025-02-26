@@ -93,12 +93,9 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		if err := cursor.Decode(&record); err != nil {
 			return fmt.Errorf("error while decoding: %s", err)
 		}
-		// TODO: Handle Deleted documents (Good First Issue)
-		if record.FullDocument != nil {
-			record.FullDocument["cdc_type"] = record.OperationType
-		}
 		handleObjectID(record.FullDocument)
 
+		// TODO: Handle Deleted documents (Good First Issue)
 		// Map MongoDB operation types to Debezium format
 		opType := "c" // default to create
 		switch record.OperationType {

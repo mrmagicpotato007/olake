@@ -552,7 +552,7 @@ func sendRecords(records []string, client proto.StringArrayServiceClient) error 
 	}
 
 	// Send to gRPC server with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Second)
 	defer cancel()
 
 	// Send the batch to the server

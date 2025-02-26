@@ -1,7 +1,10 @@
 package types
 
 import (
+	"fmt"
+
 	"github.com/fraugster/parquet-go/parquet"
+	"github.com/goccy/go-json"
 )
 
 type DataType string
@@ -30,6 +33,131 @@ type RawRecord struct {
 	OlakeTimestamp int64          `parquet:"olake_insert_time"`
 	OperationType  string         `parquet:"_"`
 	CdcTimestamp   int64          `parquet:"_"`
+}
+
+func (r *RawRecord) GetDebeziumJSON(db string, stream string) (string, error) {
+	// First create the schema and track field types
+	schema := r.createDebeziumSchema(db, stream)
+
+	// Create the payload with the actual data
+	payload := make(map[string]interface{})
+
+	// Add olake_id to payload
+	payload["olake_id"] = r.OlakeID
+
+	// Copy the data fields
+	for key, value := range r.Data {
+		payload[key] = value
+	}
+
+	// Add the metadata fields
+	payload["__deleted"] = r.DeleteTime > 0
+	payload["__op"] = r.OperationType // "r" for read/backfill, "c" for create, "u" for update
+	payload["__db"] = db
+	payload["__source_ts_ms"] = r.CdcTimestamp
+
+	// Create Debezium format
+	debeziumRecord := map[string]interface{}{
+		"destination_table": stream,
+		"key": map[string]interface{}{
+			"schema": map[string]interface{}{
+				"type": "struct",
+				"fields": []map[string]interface{}{
+					{
+						"type":     "string",
+						"optional": true,
+						"field":    "olake_id",
+					},
+				},
+				"optional": false,
+			},
+			"payload": map[string]interface{}{
+				"olake_id": r.OlakeID,
+			},
+		},
+		"value": map[string]interface{}{
+			"schema":  schema,
+			"payload": payload,
+		},
+	}
+
+	jsonBytes, err := json.Marshal(debeziumRecord)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
+}
+
+func (r *RawRecord) createDebeziumSchema(db string, stream string) map[string]interface{} {
+	fields := make([]map[string]interface{}, 0)
+
+	// Add olake_id field first
+	fields = append(fields, map[string]interface{}{
+		"type":     "string",
+		"optional": true,
+		"field":    "olake_id",
+	})
+
+	// Add data fields
+	for key, value := range r.Data {
+		field := map[string]interface{}{
+			"optional": true,
+			"field":    key,
+		}
+
+		// Determine type based on the value
+		switch value.(type) {
+		case bool:
+			field["type"] = "boolean"
+		case int, int8, int16, int32:
+			field["type"] = "int32"
+		case int64:
+			field["type"] = "int64"
+		case float32:
+			field["type"] = "float32"
+		case float64:
+			field["type"] = "float64"
+		case map[string]interface{}:
+			field["type"] = "string"
+		case []interface{}:
+			field["type"] = "string"
+		default:
+			field["type"] = "string"
+		}
+
+		fields = append(fields, field)
+	}
+
+	// Add metadata fields
+	fields = append(fields, []map[string]interface{}{
+		{
+			"type":     "boolean",
+			"optional": true,
+			"field":    "__deleted",
+		},
+		{
+			"type":     "string",
+			"optional": true,
+			"field":    "__op",
+		},
+		{
+			"type":     "string",
+			"optional": true,
+			"field":    "__db",
+		},
+		{
+			"type":     "int64",
+			"optional": true,
+			"field":    "__source_ts_ms",
+		},
+	}...)
+
+	return map[string]interface{}{
+		"type":     "struct",
+		"fields":   fields,
+		"optional": false,
+		"name":     fmt.Sprintf("%s.%s", db, stream),
+	}
 }
 
 func CreateRawRecord(olakeID string, data map[string]any, deleteAt int64, operationType string, cdcTimestamp int64) RawRecord {

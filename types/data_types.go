@@ -35,9 +35,9 @@ type RawRecord struct {
 	CdcTimestamp   int64          `parquet:"_"`
 }
 
-func (r *RawRecord) GetDebeziumJSON(db string, stream string) (string, error) {
+func (r *RawRecord) GetDebeziumJSON(db string, stream string, normalization bool) (string, error) {
 	// First create the schema and track field types
-	schema := r.createDebeziumSchema(db, stream)
+	schema := r.createDebeziumSchema(db, stream, normalization)
 
 	// Create the payload with the actual data
 	payload := make(map[string]interface{})
@@ -45,9 +45,21 @@ func (r *RawRecord) GetDebeziumJSON(db string, stream string) (string, error) {
 	// Add olake_id to payload
 	payload["olake_id"] = r.OlakeID
 
-	// Copy the data fields
-	for key, value := range r.Data {
-		payload[key] = value
+	// Handle data based on normalization flag
+	if normalization {
+		// Copy the data fields but remove olake_id if present
+		for key, value := range r.Data {
+			if key != "olake_id" {
+				payload[key] = value
+			}
+		}
+	} else {
+		// For non-normalized mode, add data as a single JSON string
+		dataBytes, err := json.Marshal(r.Data)
+		if err != nil {
+			return "", err
+		}
+		payload["data"] = string(dataBytes)
 	}
 
 	// Add the metadata fields
@@ -88,7 +100,7 @@ func (r *RawRecord) GetDebeziumJSON(db string, stream string) (string, error) {
 	return string(jsonBytes), nil
 }
 
-func (r *RawRecord) createDebeziumSchema(db string, stream string) map[string]interface{} {
+func (r *RawRecord) createDebeziumSchema(db string, stream string, normalization bool) map[string]interface{} {
 	fields := make([]map[string]interface{}, 0)
 
 	// Add olake_id field first
@@ -98,34 +110,48 @@ func (r *RawRecord) createDebeziumSchema(db string, stream string) map[string]in
 		"field":    "olake_id",
 	})
 
-	// Add data fields
-	for key, value := range r.Data {
-		field := map[string]interface{}{
+	if normalization {
+		// Add individual data fields
+		for key, value := range r.Data {
+			// Skip olake_id for normalized mode
+			if key == "olake_id" {
+				continue
+			}
+
+			field := map[string]interface{}{
+				"optional": true,
+				"field":    key,
+			}
+
+			// Determine type based on the value
+			switch value.(type) {
+			case bool:
+				field["type"] = "boolean"
+			case int, int8, int16, int32:
+				field["type"] = "int32"
+			case int64:
+				field["type"] = "int64"
+			case float32:
+				field["type"] = "float32"
+			case float64:
+				field["type"] = "float64"
+			case map[string]interface{}:
+				field["type"] = "string"
+			case []interface{}:
+				field["type"] = "string"
+			default:
+				field["type"] = "string"
+			}
+
+			fields = append(fields, field)
+		}
+	} else {
+		// For non-normalized mode, add a single data field as string
+		fields = append(fields, map[string]interface{}{
+			"type":     "string",
 			"optional": true,
-			"field":    key,
-		}
-
-		// Determine type based on the value
-		switch value.(type) {
-		case bool:
-			field["type"] = "boolean"
-		case int, int8, int16, int32:
-			field["type"] = "int32"
-		case int64:
-			field["type"] = "int64"
-		case float32:
-			field["type"] = "float32"
-		case float64:
-			field["type"] = "float64"
-		case map[string]interface{}:
-			field["type"] = "string"
-		case []interface{}:
-			field["type"] = "string"
-		default:
-			field["type"] = "string"
-		}
-
-		fields = append(fields, field)
+			"field":    "data",
+		})
 	}
 
 	// Add metadata fields

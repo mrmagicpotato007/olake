@@ -45,7 +45,7 @@ func (i *Iceberg) Setup(stream protocol.Stream, options *protocol.Options) error
 
 func (i *Iceberg) Write(ctx context.Context, record types.RawRecord) error {
 	// Convert record to Debezium format
-	debeziumRecord, err := record.GetDebeziumJSON(i.config.Database, i.stream.Name())
+	debeziumRecord, err := record.GetDebeziumJSON(i.config.Database, i.stream.Name(), i.config.Normalization)
 	if err != nil {
 		return fmt.Errorf("failed to convert record: %v", err)
 	}

@@ -71,14 +71,6 @@ func (m *MySQL) Check() error {
 	return m.db.PingContext(ctx)
 }
 
-// Close terminates the database connection
-func (m *MySQL) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
-	return nil
-}
-
 // Type returns the database type
 func (m *MySQL) Type() string {
 	return "MySQL"
@@ -244,21 +236,4 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	}
 
 	return stream, nil
-}
-
-func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPool) error {
-	// Call backfill function for change data capture (CDC) logic
-	return m.backfill(stream, pool)
-}
-func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
-	// TODO: concurrency based on configuration
-	return utils.Concurrent(context.TODO(), streams, len(streams), func(ctx context.Context, stream protocol.Stream, executionNumber int) error {
-		return m.changeStreamSync(stream, pool)
-	})
-}
-func (m *MySQL) SetupGlobalState(state *types.State) error {
-	return nil
-}
-func (m *MySQL) StateType() types.StateType {
-	return types.GlobalType
 }

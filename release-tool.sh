@@ -34,12 +34,12 @@ function setup_buildx() {
 function release() {
     local version=$1
     local platform=$2
-    local is_test=${3:-false}
+    local is_dev=${3:-false}
     local image_name="$DHID/$type-$connector"
     local tag_version=""
     
-    if [[ "$is_test" == "true" ]]; then
-        tag_version="testing-${version}"
+    if [[ "$is_dev" == "true" ]]; then
+        tag_version="dev-${version}"
     else
         tag_version="${version}"
     fi
@@ -51,10 +51,11 @@ function release() {
     # Attempt multi-platform build
     echo "Attempting multi-platform build..."
     
-    # For test images, only tag with the specified version, not 'latest'
-    if [[ "$is_test" == "true" ]]; then
+    # For dev images, only tag with the specified version, not 'latest'
+    if [[ "$is_dev" == "true" ]]; then
         docker buildx build --platform "$platform" --push \
             -t "${image_name}:${tag_version}" \
+            -t "${image_name}:dev-latest" \
             --build-arg DRIVER_NAME="$connector" \
             --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
     else
@@ -90,16 +91,16 @@ else
     echo "⚠️ Git branch $CURRENT_BRANCH is not master. Proceeding anyway."
 fi
 
-# Determine if we're in test mode
+# Determine if we're in dev mode
 # Default to false if not set
-TEST_MODE="${TEST_MODE:-false}"
-echo "Test mode: $TEST_MODE"
+DEV_MODE="${DEV_MODE:-false}"
+echo "Dev mode: $DEV_MODE"
 
-# Check version (skip strict validation for test images)
+# Check version (skip strict validation for dev images)
 if [[ -z "$VERSION" ]]; then
     fail "❌ Version not set. Empty version passed."
-elif [[ "$TEST_MODE" == "true" ]]; then
-    echo "✅ Test mode active - skipping semantic version validation for version: $VERSION"
+elif [[ "$DEV_MODE" == "true" ]]; then
+    echo "✅ Dev mode active - skipping semantic version validation for version: $VERSION"
 elif [[ $VERSION =~ $SEMVER_EXPRESSION ]]; then
     echo "✅ Version $VERSION matches semantic versioning."
 else
@@ -116,8 +117,8 @@ echo "✅ Releasing driver $DRIVER for version $VERSION to platforms: $platform"
 chalk green "=== Releasing driver: $DRIVER ==="
 chalk green "=== Release channel: $RELEASE_CHANNEL ==="
 chalk green "=== Release version: $VERSION ==="
-chalk green "=== Test mode: $TEST_MODE ==="
+chalk green "=== Dev mode: $DEV_MODE ==="
 connector=$DRIVER
 type="source"
 
-release "$VERSION" "$platform" "$TEST_MODE"
+release "$VERSION" "$platform" "$DEV_MODE"

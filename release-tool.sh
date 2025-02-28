@@ -34,14 +34,15 @@ function setup_buildx() {
 function release() {
     local version=$1
     local platform=$2
-    local is_dev=${3:-false}
+    local is_dev=${3:-true} # default dev mode
     local image_name="$DHID/$type-$connector"
-    local tag_version=""
-    
+    local tag_version="${version}"
+    local latest_tag="latest"
+
+    # dev mode check 
     if [[ "$is_dev" == "true" ]]; then
         tag_version="dev-${version}"
-    else
-        tag_version="${version}"
+        latest_tag="dev-latest"
     fi
 
     echo "Logging into Docker..."
@@ -51,15 +52,9 @@ function release() {
     # Attempt multi-platform build
     echo "Attempting multi-platform build..."
     
-    # For dev images, only tag with the specified version, not 'latest'
-    local latest_tag="${image_name}:latest"
-    if [[ "$is_dev" == "true" ]]; then
-        latest_tag="${image_name}:dev-latest"
-    fi
-    
     docker buildx build --platform "$platform" --push \
         -t "${image_name}:${tag_version}" \
-        -t "${latest_tag}" \
+        -t "${image_name}:${latest_tag}" \
         --build-arg DRIVER_NAME="$connector" \
         --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
     
@@ -87,11 +82,6 @@ if [[ $CURRENT_BRANCH == "master" ]]; then
 else
     echo "⚠️ Git branch $CURRENT_BRANCH is not master. Proceeding anyway."
 fi
-
-# Determine if we're in dev mode
-# Default to false if not set
-DEV_MODE="${DEV_MODE:-false}"
-echo "Dev mode: $DEV_MODE"
 
 # Check version (skip strict validation for dev images)
 if [[ -z "$VERSION" ]]; then

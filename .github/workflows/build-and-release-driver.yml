@@ -28,8 +28,7 @@ jobs:
       - name: Set VERSION
         run: echo "VERSION=${{ env.VERSION }}" >> $GITHUB_ENV
       - name: Show VERSION
-        run: |
-          echo "Building driver $DRIVER with version $VERSION"
+        run: echo "Building driver $DRIVER with version $VERSION"
       - name: Run Release tool
         run: |
           chmod +x ./release-tool.sh

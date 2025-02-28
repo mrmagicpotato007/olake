@@ -11,7 +11,7 @@ on:
       dev_mode:
         description: "Build development image"
         type: boolean
-        default: false
+        default: true
         required: false
 
 jobs:

@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	cdcPositionKey  = "binlog_position"
-	cdcFileKey      = "binlog_file"
-	cdcServerIDKey  = "server_id"
-	maxRetries      = 3
-	retryDelay      = 5 * time.Second
-	heartbeatPeriod = 30 * time.Second
-	idleTimeout     = 1 * time.Minute
+	cdcPositionKey   = "binlog_position"
+	cdcFileKey       = "binlog_file"
+	cdcServerIDKey   = "server_id"
+	maxRetries       = 3
+	retryDelay       = 5 * time.Second
+	heartbeatPeriod  = 30 * time.Second
+	eventReadTimeout = 500 * time.Millisecond // Short timeout to check master position frequently
 )
 
 type CDCRowEvent struct {
@@ -143,26 +143,33 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	}
 	defer insert.Close()
 
-	currentPos := pos // Initialize current position
-	ctx := context.TODO()
+	currentPos := pos           // Initialize current position
+	consecutiveTimeouts := 0    // Track consecutive timeouts
+	maxConsecutiveTimeouts := 2 // Number of consecutive timeouts to trigger a master position check
 
 	for {
-		// Get the next event with a 5-second timeout
-		eventCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// Get the next event with a very short timeout
+		eventCtx, cancel := context.WithTimeout(context.Background(), eventReadTimeout)
 		ev, err := streamer.GetEvent(eventCtx)
 		cancel()
 
 		if err != nil {
 			if err == context.DeadlineExceeded {
-				// Timeout: check if we've caught up to the master
-				masterPos, err := m.getCurrentBinlogPosition()
-				if err != nil {
-					logger.Errorf("Failed to get master status: %v", err)
-					continue
-				}
-				if currentPos.Name == masterPos.Name && currentPos.Pos == masterPos.Pos {
-					logger.Infof("Caught up to master position %s:%d, stopping CDC for stream[%s]", masterPos.Name, masterPos.Pos, stream.ID())
-					break
+				// Timeout - immediately check if we've caught up to master
+				consecutiveTimeouts++
+				if consecutiveTimeouts >= maxConsecutiveTimeouts {
+					consecutiveTimeouts = 0
+					masterPos, err := m.getCurrentBinlogPosition()
+					if err != nil {
+						logger.Errorf("Failed to get master status: %v", err)
+						continue
+					}
+
+					if currentPos.Name == masterPos.Name && currentPos.Pos == masterPos.Pos {
+						logger.Infof("Caught up to master position %s:%d, completing CDC for stream[%s]",
+							masterPos.Name, masterPos.Pos, stream.ID())
+						break
+					}
 				}
 				continue
 			}
@@ -172,7 +179,7 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 			success := false
 			for i := 0; i < maxRetries; i++ {
 				time.Sleep(retryDelay)
-				eventCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				eventCtx, cancel := context.WithTimeout(context.Background(), eventReadTimeout)
 				ev, err = streamer.GetEvent(eventCtx)
 				cancel()
 				if err == nil {
@@ -185,6 +192,9 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 				return fmt.Errorf("failed to recover after %d retries: %w", maxRetries, err)
 			}
 		}
+
+		// Reset consecutive timeouts since we got an event
+		consecutiveTimeouts = 0
 
 		// Update current position after processing the event
 		currentPos.Pos = ev.Header.LogPos
@@ -252,6 +262,9 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	// Final save of position before returning
 	stream.SetStateKey(cdcFileKey, currentPos.Name)
 	stream.SetStateKey(cdcPositionKey, currentPos.Pos)
+
+	logger.Infof("Completed CDC processing for stream[%s] at position %s:%d",
+		stream.ID(), currentPos.Name, currentPos.Pos)
 
 	return nil
 }

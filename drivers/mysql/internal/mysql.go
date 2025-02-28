@@ -120,6 +120,7 @@ func (m *MySQL) Discover(discoverSchema bool) ([]*types.Stream, error) {
 		if err != nil && discoverCtx.Err() == nil {
 			return fmt.Errorf("failed to process table[%s]: %s", streamName, err)
 		}
+		stream.SyncMode = m.config.DefaultMode
 		// cache stream
 		m.AddStream(stream)
 		return err

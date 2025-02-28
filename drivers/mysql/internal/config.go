@@ -4,17 +4,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
 )
 
 // Config represents the configuration for connecting to a MySQL database
 type Config struct {
-	Hosts         []string `json:"hosts"`
-	Username      string   `json:"username"`
-	Password      string   `json:"password"`
-	Database      string   `json:"database"`
-	Port          int      `json:"port"`
-	TLSSkipVerify bool     `json:"tls_skip_verify"` // Add this field
+	Hosts         []string       `json:"hosts"`
+	Username      string         `json:"username"`
+	Password      string         `json:"password"`
+	Database      string         `json:"database"`
+	Port          int            `json:"port"`
+	TLSSkipVerify bool           `json:"tls_skip_verify"` // Add this field
+	DefaultMode   types.SyncMode `json:"default_mode"`
 }
 
 // URI generates the connection URI for the MySQL database

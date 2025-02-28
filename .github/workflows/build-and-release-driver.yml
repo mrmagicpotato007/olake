@@ -8,11 +8,6 @@ on:
       version:
         description: "Version to release"
         required: true
-      dev_mode:
-        description: "Build development image"
-        type: boolean
-        default: true
-        required: false
 
 jobs:
   publish_drivers:
@@ -26,7 +21,7 @@ jobs:
       DHID: ${{ secrets.DOCKER_REPO || 'olakego' }}
       DRIVER: ${{ github.event.inputs.driver || 'mongodb' }}
       VERSION: ${{ github.event.inputs.version || 'v0.0.0.dev' }}
-      DEV_MODE: ${{ github.event.inputs.dev_mode || 'true' }}
+      BRANCH_NAME: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -34,11 +29,11 @@ jobs:
         run: echo "DRIVER=${{ env.DRIVER }}" >> $GITHUB_ENV
       - name: Set VERSION
         run: echo "VERSION=${{ env.VERSION }}" >> $GITHUB_ENV
-      - name: Set DEV_MODE
-        run: echo "DEV_MODE=${{ env.DEV_MODE }}" >> $GITHUB_ENV
+      - name: Set BRANCH_NAME
+        run: echo "BRANCH_NAME=${{ env.BRANCH_NAME }}" >> $GITHUB_ENV
       - name: Show VERSION
         run: |
-          echo "Building driver $DRIVER with version $VERSION (Dev mode: $DEV_MODE)"
+          echo "Building driver $DRIVER with version $VERSION on branch $BRANCH_NAME"
       - name: Run Release tool
         run: |
           chmod +x ./release-tool.sh

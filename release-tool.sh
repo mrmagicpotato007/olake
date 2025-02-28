@@ -34,20 +34,38 @@ function setup_buildx() {
 function release() {
     local version=$1
     local platform=$2
+    local is_test=${3:-false}
     local image_name="$DHID/$type-$connector"
+    local tag_version=""
+    
+    if [[ "$is_test" == "true" ]]; then
+        tag_version="testing-${version}"
+    else
+        tag_version="${version}"
+    fi
 
     echo "Logging into Docker..."
     docker login -u="$DOCKER_LOGIN" -p="$DOCKER_PASSWORD" || fail "Docker login failed for $DOCKER_LOGIN"
-    echo "**** Releasing $type-$connector for platforms [$platform] with version [$version] ****"
+    echo "**** Releasing $image_name for platforms [$platform] with version [$tag_version] ****"
 
     # Attempt multi-platform build
     echo "Attempting multi-platform build..."
-    docker buildx build --platform "$platform" --push \
-        -t "${image_name}:${version}" \
-        -t "${image_name}:latest" \
-        --build-arg DRIVER_NAME="$connector" \
-        --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
-    echo "$(chalk green "Release successful for $type-$connector version $version")"
+    
+    # For test images, only tag with the specified version, not 'latest'
+    if [[ "$is_test" == "true" ]]; then
+        docker buildx build --platform "$platform" --push \
+            -t "${image_name}:${tag_version}" \
+            --build-arg DRIVER_NAME="$connector" \
+            --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
+    else
+        docker buildx build --platform "$platform" --push \
+            -t "${image_name}:${tag_version}" \
+            -t "${image_name}:latest" \
+            --build-arg DRIVER_NAME="$connector" \
+            --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
+    fi
+    
+    echo "$(chalk green "Release successful for $image_name version $tag_version")"
 }
 
 # Main script execution
@@ -72,9 +90,16 @@ else
     echo "⚠️ Git branch $CURRENT_BRANCH is not master. Proceeding anyway."
 fi
 
-# Check version
+# Determine if we're in test mode
+# Default to false if not set
+TEST_MODE="${TEST_MODE:-false}"
+echo "Test mode: $TEST_MODE"
+
+# Check version (skip strict validation for test images)
 if [[ -z "$VERSION" ]]; then
     fail "❌ Version not set. Empty version passed."
+elif [[ "$TEST_MODE" == "true" ]]; then
+    echo "✅ Test mode active - skipping semantic version validation for version: $VERSION"
 elif [[ $VERSION =~ $SEMVER_EXPRESSION ]]; then
     echo "✅ Version $VERSION matches semantic versioning."
 else
@@ -91,7 +116,8 @@ echo "✅ Releasing driver $DRIVER for version $VERSION to platforms: $platform"
 chalk green "=== Releasing driver: $DRIVER ==="
 chalk green "=== Release channel: $RELEASE_CHANNEL ==="
 chalk green "=== Release version: $VERSION ==="
+chalk green "=== Test mode: $TEST_MODE ==="
 connector=$DRIVER
 type="source"
 
-release "$VERSION" "$platform"
+release "$VERSION" "$platform" "$TEST_MODE"

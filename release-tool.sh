@@ -71,7 +71,7 @@ SEMVER_EXPRESSION='v([0-9]+\.[0-9]+\.[0-9]+)$'
 STAGING_VERSION_EXPRESSION='v([0-9]+\.[0-9]+\.[0-9]+)-[a-zA-Z0-9_.-]+'
 
 echo "Release tool running..."
-CURRENT_BRANCH="${BRANCH_NAME:-master}"  # Use BRANCH_NAME from environment
+CURRENT_BRANCH=$(git branch --show-current)
 echo "Building on branch: $CURRENT_BRANCH"
 echo "Fetching remote changes from git with git fetch"
 git fetch origin "$CURRENT_BRANCH" >/dev/null 2>&1

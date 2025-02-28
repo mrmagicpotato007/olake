@@ -80,12 +80,15 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 
 	// Generate chunks based on range
 	query := fmt.Sprintf(`
-		SELECT %[1]s 
-		FROM %[2]s.%[3]s 
-		WHERE %[1]s >= ? 
-		ORDER BY %[1]s 
-		LIMIT ?, 1
-	`, pkColumn, stream.Namespace(), stream.Name())
+    SELECT MAX(%[1]s) 
+      FROM (
+	SELECT %[1]s 
+	FROM %[2]s.%[3]s 
+	WHERE %[1]s > ? 
+	ORDER BY %[1]s 
+	LIMIT ?
+) AS subquery
+`, pkColumn, stream.Namespace(), stream.Name())
 
 	var currentVal interface{} = minVal
 	for {

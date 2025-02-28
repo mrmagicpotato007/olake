@@ -34,15 +34,20 @@ function setup_buildx() {
 function release() {
     local version=$1
     local platform=$2
-    local is_dev=${3:-true} # default dev mode
+    local branch=${3:-master}
     local image_name="$DHID/$type-$connector"
-    local tag_version="${version}"
-    local latest_tag="latest"
+    
+    # Default to dev mode
+    local tag_version="dev-${version}"
+    local latest_tag="dev-latest"
 
-    # dev mode check 
-    if [[ "$is_dev" == "true" ]]; then
-        tag_version="dev-${version}"
-        latest_tag="dev-latest"
+    # Override for special branches
+    if [[ "$branch" == "master" ]]; then
+        tag_version="${version}"
+        latest_tag="latest"
+    elif [[ "$branch" == "staging" ]]; then
+        tag_version="stag-${version}"
+        latest_tag="stag-latest"
     fi
 
     echo "Logging into Docker..."
@@ -62,11 +67,12 @@ function release() {
 }
 
 # Main script execution
-SEMVER_EXPRESSION='v([0-9].[0-9].[0-9]+(\S*))'
+SEMVER_EXPRESSION='v([0-9]+\.[0-9]+\.[0-9]+)$'
+STAGING_VERSION_EXPRESSION='v([0-9]+\.[0-9]+\.[0-9]+)-[a-zA-Z0-9_.-]+'
+
 echo "Release tool running..."
-CURRENT_BRANCH=$(git branch --show-current)
-echo "Fetching remote changes from git with git fetch"
-git fetch origin "$CURRENT_BRANCH" >/dev/null 2>&1
+CURRENT_BRANCH="${BRANCH_NAME:-master}"  # Use BRANCH_NAME from environment
+echo "Building on branch: $CURRENT_BRANCH"
 GIT_COMMITSHA=$(git rev-parse HEAD | cut -c 1-8)
 echo "Latest commit SHA: $GIT_COMMITSHA"
 
@@ -76,22 +82,20 @@ echo "Running checks..."
 docker login -u="$DOCKER_LOGIN" -p="$DOCKER_PASSWORD" >/dev/null 2>&1 || fail "❌ Docker login failed. Ensure DOCKER_LOGIN and DOCKER_PASSWORD are set."
 echo "✅ Docker login successful"
 
-# Check branch
-if [[ $CURRENT_BRANCH == "master" ]]; then
-    echo "✅ Git branch is $CURRENT_BRANCH"
-else
-    echo "⚠️ Git branch $CURRENT_BRANCH is not master. Proceeding anyway."
-fi
-
-# Check version (skip strict validation for dev images)
+# Version validation based on branch (default is dev with no restrictions)
 if [[ -z "$VERSION" ]]; then
     fail "❌ Version not set. Empty version passed."
-elif [[ "$DEV_MODE" == "true" ]]; then
-    echo "✅ Dev mode active - skipping semantic version validation for version: $VERSION"
-elif [[ $VERSION =~ $SEMVER_EXPRESSION ]]; then
-    echo "✅ Version $VERSION matches semantic versioning."
+fi
+
+# Only validate special branches
+if [[ "$CURRENT_BRANCH" == "master" ]]; then
+    [[ $VERSION =~ $SEMVER_EXPRESSION ]] || fail "❌ Version $VERSION does not match semantic versioning required for master branch (e.g., v1.0.0)"
+    echo "✅ Version $VERSION matches semantic versioning for master branch"
+elif [[ "$CURRENT_BRANCH" == "staging" ]]; then
+    [[ $VERSION =~ $STAGING_VERSION_EXPRESSION ]] || fail "❌ Version $VERSION does not match staging version format (e.g., v1.0.0-rc1)"
+    echo "✅ Version $VERSION matches format for staging branch"
 else
-    fail "❌ Version $VERSION does not match semantic versioning. Example: v1.0.0, v1.0.0-alpha.beta, v0.6.0-rc.6fd"
+    echo "✅ Flexible versioning allowed for development branch: $VERSION"
 fi
 
 # Setup buildx and QEMU
@@ -99,13 +103,12 @@ setup_buildx
 
 # Release the driver
 platform="linux/amd64,linux/arm64"
-echo "✅ Releasing driver $DRIVER for version $VERSION to platforms: $platform"
+echo "✅ Releasing driver $DRIVER for version $VERSION on branch $CURRENT_BRANCH to platforms: $platform"
 
 chalk green "=== Releasing driver: $DRIVER ==="
-chalk green "=== Release channel: $RELEASE_CHANNEL ==="
+chalk green "=== Branch: $CURRENT_BRANCH ==="
 chalk green "=== Release version: $VERSION ==="
-chalk green "=== Dev mode: $DEV_MODE ==="
 connector=$DRIVER
 type="source"
 
-release "$VERSION" "$platform" "$DEV_MODE"
+release "$VERSION" "$platform" "$CURRENT_BRANCH"

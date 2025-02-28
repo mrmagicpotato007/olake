@@ -1,8 +1,5 @@
 name: Olake Driver Build And Release
 on:
-  push: # TODO: Remove it
-    branches:
-      - "chore/test-releaser"
   workflow_dispatch:
     inputs:
       driver:

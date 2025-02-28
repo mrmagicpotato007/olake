@@ -52,19 +52,16 @@ function release() {
     echo "Attempting multi-platform build..."
     
     # For dev images, only tag with the specified version, not 'latest'
+    local latest_tag="${image_name}:latest"
     if [[ "$is_dev" == "true" ]]; then
-        docker buildx build --platform "$platform" --push \
-            -t "${image_name}:${tag_version}" \
-            -t "${image_name}:dev-latest" \
-            --build-arg DRIVER_NAME="$connector" \
-            --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
-    else
-        docker buildx build --platform "$platform" --push \
-            -t "${image_name}:${tag_version}" \
-            -t "${image_name}:latest" \
-            --build-arg DRIVER_NAME="$connector" \
-            --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
+        latest_tag="${image_name}:dev-latest"
     fi
+    
+    docker buildx build --platform "$platform" --push \
+        -t "${image_name}:${tag_version}" \
+        -t "${latest_tag}" \
+        --build-arg DRIVER_NAME="$connector" \
+        --build-arg DRIVER_VERSION="$VERSION" . || fail "Multi-platform build failed. Exiting..."
     
     echo "$(chalk green "Release successful for $image_name version $tag_version")"
 }

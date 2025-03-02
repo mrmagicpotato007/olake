@@ -6,7 +6,6 @@ import (
 	"github.com/datazip-inc/olake/protocol"
 
 	"github.com/jackc/pgx/v5"
-	_ "github.com/lib/pq"
 )
 
 type Snapshotter struct {

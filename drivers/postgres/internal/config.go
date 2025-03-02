@@ -11,75 +11,18 @@ import (
 )
 
 type Config struct {
-	Connection *url.URL `json:"-"`
-	// Hostname of the database.
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	Host string `json:"host"`
-	// Port of the database.
-	//
-	// @jsonschema(
-	// required=true,
-	//  minimum=0,
-	//  maximum=65536,
-	//  default=5432
-	// )
-	Port int `json:"port"`
-	// Name of the database.
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	Database string `json:"database"`
-
-	// user of the database.
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	Username string `json:"username"`
-	// password of the user.
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	Password string `json:"password"`
-	// JDBC URL Parameters (Advanced)
-	//
-	// @jsonschema(
-	// description="Additional properties to pass to the JDBC URL string when connecting to the database. For more information read about https://jdbc.postgresql.org/documentation/head/connect.html"
-	// )
-	JDBCURLParams map[string]string `json:"jdbc_url_params"`
-	// Hostname of the database.
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	SSLConfiguration *utils.SSLConfig `json:"ssl"`
-
-	// Configures how data is extracted from the database.
-	//
-	// @jsonschema(
-	// required=true,
-	// oneOf=["Standard","CDC"]
-	// )
-	UpdateMethod interface{} `json:"update_method"`
-
-	// Configures default mode for source
-	//
-	// @jsonschema(
-	// required=true,
-	// oneOf=["full_refresh","cdc","incremental"]
-	// )
-	DefaultSyncMode types.SyncMode `json:"default_mode"`
-	// Configures Batch Size of Query
-	//
-	// @jsonschema(
-	// required=true
-	// )
-	BatchSize int `json:"reader_batch_size"`
+	Connection       *url.URL          `json:"-"`
+	Host             string            `json:"host"`
+	Port             int               `json:"port"`
+	Database         string            `json:"database"`
+	Username         string            `json:"username"`
+	Password         string            `json:"password"`
+	JDBCURLParams    map[string]string `json:"jdbc_url_params"`
+	SSLConfiguration *utils.SSLConfig  `json:"ssl"`
+	UpdateMethod     interface{}       `json:"update_method"`
+	DefaultSyncMode  types.SyncMode    `json:"default_mode"`
+	BatchSize        int               `json:"reader_batch_size"`
+	MaxThreads       int               `json:"max_threads"`
 }
 
 // Standard Sync
@@ -88,19 +31,8 @@ type Standard struct {
 
 // Capture Write Ahead Logs
 type CDC struct {
-	// A plugin logical replication slot. Read about replication slots.
-	//
-	// @jsonschema(
-	// required=true
-	// )
 	ReplicationSlot string `json:"replication_slot"`
-	// Initial Wait Time for first CDC Log
-	//
-	// @jsonschema(
-	// required=true,
-	// default=0
-	// )
-	InitialWaitTime int `json:"intial_wait_time"`
+	InitialWaitTime int    `json:"intial_wait_time"`
 }
 
 func (c *Config) Validate() error {

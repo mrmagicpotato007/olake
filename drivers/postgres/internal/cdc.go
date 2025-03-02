@@ -11,6 +11,7 @@ import (
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
+	// "github.com/jackc/pglogrepl"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -68,6 +69,7 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 	if err != nil {
 		return err
 	}
+
 	insertionMap := make(map[protocol.Stream]protocol.InsertFunction)
 	for _, stream := range streams {
 		insert, err := pool.NewThread(cdcCtx, stream)
@@ -100,8 +102,6 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 			return false, nil
 		}
 
-		// TODO: State Management
-
 		return false, nil
 	})
 }
@@ -127,7 +127,7 @@ func validateReplicationSlot(conn *sqlx.DB, slotName string) error {
 	}
 
 	if slot.Plugin != "wal2json" {
-		return fmt.Errorf("Plugin not supported[%s]: driver only supports wal2json", slot.Plugin)
+		return fmt.Errorf("plugin not supported[%s]: driver only supports wal2json", slot.Plugin)
 	}
 
 	if slot.SlotType != "logical" {

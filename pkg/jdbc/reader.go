@@ -51,31 +51,21 @@ func (o *Reader[T]) Capture(onCapture func(T) error) error {
 		return fmt.Errorf("base query ends with ';': %s", o.query)
 	}
 
-	for {
-		rows, err := o.exec(o.ctx, o.query, o.args...)
-		if err != nil {
-			return err
-		}
-
-		length := 0
-		for rows.Next() {
-			err := onCapture(rows)
-			if err != nil {
-				return err
-			}
-
-			length++
-		}
-
-		err = rows.Err()
-		if err != nil {
-			return err
-		}
-
-		if length != o.batchSize {
-			return nil
-		}
-
-		o.offset += length
+	rows, err := o.exec(o.ctx, o.query, o.args...)
+	if err != nil {
+		return err
 	}
+
+	for rows.Next() {
+		err := onCapture(rows)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return err
+	}
+	return nil
 }

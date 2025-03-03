@@ -13,6 +13,13 @@ function chalk() {
     echo -e "$(tput setaf $color_code)${text}$(tput sgr0)"
 }
 
+# Function to build the Java project with Maven
+function build_java_project() {
+    echo "Building Java project with Maven..."
+    mvn clean package -Dmaven.test.skip=true || fail "Maven build failed"
+    echo "$(chalk green "✅ Java project successfully built")"
+}
+
 # Function to fail with a message
 function fail() {
     local error="${1:-Unknown error}"
@@ -93,5 +100,8 @@ chalk green "=== Release channel: $RELEASE_CHANNEL ==="
 chalk green "=== Release version: $VERSION ==="
 connector=$DRIVER
 type="source"
+
+# Build Java project
+build_java_project
 
 release "$VERSION" "$platform"

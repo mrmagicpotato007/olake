@@ -36,16 +36,39 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("s3_path is required")
 	}
 	if c.JarPath == "" {
-		// Set JarPath to the current directory + the path to the jar file
+		// Set JarPath based on file existence in two possible locations
 		execDir, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("failed to get current directory: %v", err)
 		}
+
 		// Remove /drivers/* from execDir if present
 		if idx := strings.LastIndex(execDir, "/drivers/"); idx != -1 {
 			execDir = execDir[:idx]
 		}
-		c.JarPath = fmt.Sprintf("%s/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
+
+		// First, check if the JAR exists in the base directory
+		baseJarPath := fmt.Sprintf("%s/debezium-server-iceberg-sink.jar", execDir)
+		if _, err := os.Stat(baseJarPath); err == nil {
+			// JAR file exists in base directory
+			c.JarPath = baseJarPath
+		} else {
+			// Otherwise, look in the target directory
+			targetJarPath := fmt.Sprintf("%s/writers/iceberg/debezium-server-iceberg-sink/target/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
+			if _, err := os.Stat(targetJarPath); err == nil {
+				c.JarPath = targetJarPath
+			} else {
+				// Check the previous location as last resort
+				fallbackPath := fmt.Sprintf("%s/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
+				if _, err := os.Stat(fallbackPath); err == nil {
+					c.JarPath = fallbackPath
+				} else {
+					// Throw error if JAR is not found in any location
+					return fmt.Errorf("Iceberg JAR file not found in any of the expected locations: %s, %s, or %s",
+						baseJarPath, targetJarPath, fallbackPath)
+				}
+			}
+		}
 	}
 	if c.ServerHost == "" {
 		c.ServerHost = "localhost"

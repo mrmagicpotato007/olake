@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/utils"
 )
 
@@ -42,25 +43,32 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("failed to get current directory: %v", err)
 		}
 
+		logger.Infof("Current working directory: %s", execDir)
+
 		// Remove /drivers/* from execDir if present
 		if idx := strings.LastIndex(execDir, "/drivers/"); idx != -1 {
 			execDir = execDir[:idx]
 		}
 
+		logger.Infof("Current working directory: %s", execDir)
+
 		// First, check if the JAR exists in the base directory
 		baseJarPath := fmt.Sprintf("%s/debezium-server-iceberg-sink.jar", execDir)
 		if _, err := os.Stat(baseJarPath); err == nil {
 			// JAR file exists in base directory
+			logger.Infof("Iceberg JAR file found in base directory: %s", baseJarPath)
 			c.JarPath = baseJarPath
 		} else {
 			// Otherwise, look in the target directory
 			targetJarPath := fmt.Sprintf("%s/writers/iceberg/debezium-server-iceberg-sink/target/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
 			if _, err := os.Stat(targetJarPath); err == nil {
+				logger.Infof("Iceberg JAR file found in target directory: %s", targetJarPath)
 				c.JarPath = targetJarPath
 			} else {
 				// Check the previous location as last resort
 				fallbackPath := fmt.Sprintf("%s/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
 				if _, err := os.Stat(fallbackPath); err == nil {
+					logger.Infof("Iceberg JAR file found in fallback location: %s", fallbackPath)
 					c.JarPath = fallbackPath
 				} else {
 					// Throw error if JAR is not found in any location

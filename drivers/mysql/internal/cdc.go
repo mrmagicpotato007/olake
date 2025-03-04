@@ -24,13 +24,6 @@ const (
 	eventReadTimeout = 500 * time.Millisecond // Short timeout to check master position frequently
 )
 
-type CDCRowEvent struct {
-	OperationType string
-	TableName     string
-	SchemaName    string
-	RowData       map[string]interface{}
-}
-
 // RunChangeStream implements the CDC functionality for multiple streams concurrently
 func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
 	// Use the same concurrent approach as MongoDB connector

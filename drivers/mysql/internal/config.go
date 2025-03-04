@@ -17,6 +17,7 @@ type Config struct {
 	Port          int            `json:"port"`
 	TLSSkipVerify bool           `json:"tls_skip_verify"` // Add this field
 	DefaultMode   types.SyncMode `json:"default_mode"`
+	MaxThreads    int            `json:"max_threads"`
 }
 
 // URI generates the connection URI for the MySQL database

@@ -75,21 +75,22 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 
 	logger.Infof("Stream %s extremes - min: %v, max: %v", stream.ID(), minVal, maxVal)
 
-	// Calculate optimal chunk size based on table statistics
+	//Calculate optimal chunk size based on table statistics
 	chunkSize, err := m.calculateChunksSize(stream)
 	if err != nil {
 		return fmt.Errorf("failed to calculate chunk size: %w", err)
 	}
-
+	fmt.Println("chunkSize", chunkSize)
 	// Generate chunks based on range
 	query := fmt.Sprintf(`
     SELECT MAX(%[1]s) 
-        FROM (
-            SELECT %[1]s 
-            FROM %[2]s.%[3]s 
-            ORDER BY %[1]s 
-            LIMIT ?
-        ) AS subquery
+      FROM (
+	SELECT %[1]s 
+	FROM %[2]s.%[3]s 
+	WHERE %[1]s > ? 
+	ORDER BY %[1]s 
+	LIMIT ?
+) AS subquery
 `, pkColumn, stream.Namespace(), stream.Name())
 
 	var currentVal interface{} = minVal
@@ -105,7 +106,6 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 			break
 		}
 		nextVal := convertToString(nextValRaw)
-
 		chunks.Insert(types.Chunk{
 			Min: convertToString(currentVal),
 			Max: nextVal,
@@ -150,7 +150,7 @@ func (m *MySQL) processChunk(ctx context.Context, pool *protocol.WriterPool, str
 	query := fmt.Sprintf(`
 		SELECT * 
 		FROM %s.%s 
-		WHERE %s >= ? AND %s <= ?
+		WHERE %s > ? AND %s <= ?
 		ORDER BY %s
 	`, stream.Namespace(), stream.Name(), pkColumn, pkColumn, pkColumn)
 
@@ -211,6 +211,7 @@ func (m *MySQL) processChunk(ctx context.Context, pool *protocol.WriterPool, str
 
 	return rows.Err()
 }
+
 func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 	var totalRecords int
 	query := `SELECT TABLE_ROWS
@@ -222,5 +223,5 @@ func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 		return 0, fmt.Errorf("faield to get estimated records count:%v", err)
 
 	}
-	return 4 * totalRecords / m.config.MaxThreads, nil
+	return totalRecords / (m.config.MaxThreads * 8), nil
 }

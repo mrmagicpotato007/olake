@@ -51,30 +51,31 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 
 	// Check if we have position in state
 	hasBinlogPosition := false
+	// Check if we have a position in state
 	if posStr := stream.GetStateKey(cdcPositionKey); posStr != nil {
-		if posVal, ok := posStr.(float64); ok {
-			pos.Pos = uint32(posVal)
-			hasBinlogPosition = true
-		} else if posStrVal, ok := posStr.(string); ok {
-			if posInt, err := strconv.ParseUint(posStrVal, 10, 32); err == nil {
+		switch v := posStr.(type) {
+		case float64:
+			pos.Pos = uint32(v)
+		case string:
+			if posInt, err := strconv.ParseUint(v, 10, 32); err == nil {
 				pos.Pos = uint32(posInt)
-				hasBinlogPosition = true
 			}
 		}
+		hasBinlogPosition = true
 	}
 
-	if fileStr := stream.GetStateKey(cdcFileKey); fileStr != nil {
-		if fileStrVal, ok := fileStr.(string); ok {
-			pos.Name = fileStrVal
-			hasBinlogPosition = true
-		}
+	// Check if we have a file position in state
+	if fileStr, ok := stream.GetStateKey(cdcFileKey).(string); ok {
+		pos.Name = fileStr
+		hasBinlogPosition = true
 	}
 
 	if serverIDStr := stream.GetStateKey(cdcServerIDKey); serverIDStr != nil {
-		if idVal, ok := serverIDStr.(float64); ok {
-			serverID = uint32(idVal)
-		} else if idStr, ok := serverIDStr.(string); ok {
-			if idVal, err := strconv.ParseUint(idStr, 10, 32); err == nil {
+		switch v := serverIDStr.(type) {
+		case float64:
+			serverID = uint32(v)
+		case string:
+			if idVal, err := strconv.ParseUint(v, 10, 32); err == nil {
 				serverID = uint32(idVal)
 			}
 		}
@@ -136,10 +137,8 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	}
 	defer insert.Close()
 
-	currentPos := pos           // Initialize current position
-	consecutiveTimeouts := 0    // Track consecutive timeouts
-	maxConsecutiveTimeouts := 2 // Number of consecutive timeouts to trigger a master position check
-
+	currentPos := pos        // Initialize current position
+	consecutiveTimeouts := 0 // Track consecutive timeouts
 	for {
 		// Get the next event with a very short timeout
 		eventCtx, cancel := context.WithTimeout(context.Background(), eventReadTimeout)
@@ -150,7 +149,7 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 			if err == context.DeadlineExceeded {
 				// Timeout - immediately check if we've caught up to master
 				consecutiveTimeouts++
-				if consecutiveTimeouts >= maxConsecutiveTimeouts {
+				if consecutiveTimeouts >= 2 {
 					consecutiveTimeouts = 0
 					masterPos, err := m.getCurrentBinlogPosition()
 					if err != nil {

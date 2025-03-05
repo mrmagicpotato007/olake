@@ -70,7 +70,7 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 		defer cancelThread()
 
 		waitChannel := make(chan error, 1)
-		insert, err := pool.NewThread(threadContext, stream, protocol.WithWaitChannel(waitChannel))
+		insert, err := pool.NewThread(threadContext, stream, protocol.WithErrorChannel(waitChannel))
 		if err != nil {
 			return err
 		}
@@ -97,12 +97,9 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 				}
 
 				handleObjectID(doc)
-				exit, err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
+				err := insert.Insert(types.CreateRawRecord(utils.GetKeysHash(doc, constants.MongoPrimaryID), doc, 0))
 				if err != nil {
 					return fmt.Errorf("failed to finish backfill chunk: %s", err)
-				}
-				if exit {
-					return nil
 				}
 			}
 			return cursor.Err()

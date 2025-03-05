@@ -12,13 +12,11 @@ import (
 
 type Config struct {
 	Tables                     *types.Set[protocol.Stream]
-	FullSyncTables             *types.Set[protocol.Stream] // full sync tables must be a subset of ChangeTables
 	Connection                 url.URL
 	ReplicationSlotName        string
 	InitialWaitTime            time.Duration
 	SnapshotMemorySafetyFactor float64
 	TLSConfig                  *tls.Config
-	State                      *types.Global[*WALState]
 	BatchSize                  int
 }
 

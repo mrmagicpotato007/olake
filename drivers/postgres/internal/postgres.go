@@ -189,6 +189,8 @@ func (p *Postgres) Read(pool *protocol.WriterPool, stream protocol.Stream) error
 	switch stream.GetSyncMode() {
 	case types.FULLREFRESH:
 		return p.backfill(pool, stream)
+	case types.CDC:
+		return p.RunChangeStream(pool, stream)
 	}
 
 	return nil

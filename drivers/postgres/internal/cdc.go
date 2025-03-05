@@ -11,6 +11,8 @@ import (
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
+	"github.com/jackc/pglogrepl"
+
 	// "github.com/jackc/pglogrepl"
 	"github.com/jmoiron/sqlx"
 )
@@ -24,20 +26,9 @@ func (p *Postgres) prepareWALJSConfig(streams ...protocol.Stream) (*waljs.Config
 		Connection:          *p.config.Connection,
 		ReplicationSlotName: p.cdcConfig.ReplicationSlot,
 		InitialWaitTime:     time.Duration(p.cdcConfig.InitialWaitTime) * time.Second,
-		State:               p.cdcState,
-		FullSyncTables:      types.NewSet[protocol.Stream](),
 		Tables:              types.NewSet[protocol.Stream](),
 		BatchSize:           p.config.BatchSize,
 	}
-
-	for _, stream := range streams {
-		if stream.Self().GetStateCursor() == nil {
-			config.FullSyncTables.Insert(stream)
-		}
-
-		config.Tables.Insert(stream)
-	}
-
 	return config, nil
 }
 
@@ -58,7 +49,7 @@ func (p *Postgres) SetupGlobalState(state *types.State) error {
 }
 
 // Write Ahead Log Sync
-func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
+func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) (err error) {
 	cdcCtx := context.TODO()
 	config, err := p.prepareWALJSConfig(streams...)
 	if err != nil {
@@ -69,18 +60,55 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 	if err != nil {
 		return err
 	}
+	defer socket.Cleanup()
+	health := p.cdcState.State.LSN
+	fmt.Println("here health: ", health)
+	if p.cdcState.State.LSN != "" {
+		stateLSN, err := pglogrepl.ParseLSN(p.cdcState.State.LSN)
+		if err != nil {
+			return fmt.Errorf("failed to parse State LSN: %s", err)
+		}
 
-	insertionMap := make(map[protocol.Stream]protocol.InsertFunction)
+		// difference in confirmed flush lsn from State and DB
+		if stateLSN.String() != socket.RestartLSN.String() {
+			return utils.Concurrent(cdcCtx, streams, len(streams), func(ctx context.Context, stream protocol.Stream, _ int) error {
+				defer p.cdcState.Streams.Insert(stream.ID())
+				return p.backfill(pool, stream)
+			})
+		}
+	} else {
+		// save current lsn
+		p.cdcState.State.LSN = socket.RestartLSN.String()
+		// TODO: Save Global state
+	}
+
+	insertionMap := make(map[protocol.Stream]*protocol.ThreadEvent)
+	errorChannelMap := make(map[protocol.Stream]chan error)
 	for _, stream := range streams {
-		insert, err := pool.NewThread(cdcCtx, stream)
+		errorChannelMap[stream] = make(chan error)
+		insert, err := pool.NewThread(cdcCtx, stream, protocol.WithErrorChannel(errorChannelMap[stream]))
 		if err != nil {
 			return err
 		}
-		defer insert.Close()
-		insertionMap[stream] = insert.Insert
+		insertionMap[stream] = insert
 	}
 
-	return socket.OnMessage(func(message waljs.WalJSChange) (bool, error) {
+	defer func() {
+		if err != nil {
+			for stream, insertThread := range insertionMap {
+				insertThread.Close()
+				err = <-errorChannelMap[stream]
+			}
+			if err != nil {
+				err = socket.AcknowledgeLSN()
+				// if err != nil {
+				// TODO: Update state or take action accordingly
+				// }
+			}
+		}
+	}()
+
+	return socket.StreamMessages(cdcCtx, func(message waljs.WalJSChange) (bool, error) {
 		if message.Kind == "delete" {
 			message.Data[jdbc.CDCDeletedAt] = message.Timestamp
 		}
@@ -94,12 +122,9 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 
 		// insert record
 		rawRecord := types.CreateRawRecord(olakeID, message.Data, message.Timestamp.UnixMilli())
-		exit, err := insertionMap[message.Stream](rawRecord)
+		err := insertionMap[message.Stream].Insert(rawRecord)
 		if err != nil {
 			return false, err
-		}
-		if exit {
-			return false, nil
 		}
 
 		return false, nil

@@ -97,12 +97,9 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		}
 		handleObjectID(record.FullDocument)
 		rawRecord := types.CreateRawRecord(utils.GetKeysHash(record.FullDocument, constants.MongoPrimaryID), record.FullDocument, 0)
-		exit, err := insert.Insert(rawRecord)
+		err := insert.Insert(rawRecord)
 		if err != nil {
 			return err
-		}
-		if exit {
-			return nil
 		}
 
 		prevResumeToken = cursor.ResumeToken().Lookup(cdcCursorField).StringValue()

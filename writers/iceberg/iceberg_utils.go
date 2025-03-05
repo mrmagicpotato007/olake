@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -199,14 +198,36 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		return fmt.Errorf("failed to create server config: %v", err)
 	}
 
+	// Set up process output capture using the logger utility
+	processName := fmt.Sprintf("Java-Iceberg:%d", i.port)
+	stdoutReader, stderrReader, stdoutWriter, stderrWriter, err := logger.SetupProcessOutputCapture(processName)
+	if err != nil {
+		return fmt.Errorf("failed to set up process output capture: %v", err)
+	}
+
 	// Start the Java server process
 	i.cmd = exec.Command("java", "-jar", i.config.JarPath, string(configJSON))
-	i.cmd.Stdout = os.Stdout
-	i.cmd.Stderr = os.Stderr
+
+	// Set the command's stdout and stderr to our pipes
+	i.cmd.Stdout = stdoutWriter
+	i.cmd.Stderr = stderrWriter
 
 	if err := i.cmd.Start(); err != nil {
+		stdoutReader.Close()
+		stderrReader.Close()
+		stdoutWriter.Close()
+		stderrWriter.Close()
 		return fmt.Errorf("failed to start Iceberg server: %v", err)
 	}
+
+	// Start reading from the process output
+	stdoutReader.StartReading()
+	stderrReader.StartReading()
+
+	// Close the write end of the pipes in the parent process
+	// since they're only needed by the child process
+	stdoutWriter.Close()
+	stderrWriter.Close()
 
 	// Connect to gRPC server
 	conn, err := grpc.NewClient(`localhost:`+strconv.Itoa(i.port),
@@ -423,6 +444,11 @@ func flushLocalBuffer(buffer *LocalBuffer, configHash string, client proto.Strin
 		return nil
 	}
 
+	// Check if client is nil and we might need to flush
+	if buffer.size >= maxBatchSize && client == nil {
+		return fmt.Errorf("cannot flush local buffer: gRPC client is nil")
+	}
+
 	batch := getOrCreateBatch(configHash)
 
 	// Lock the batch only once when flushing the local buffer
@@ -462,6 +488,11 @@ func flushLocalBuffer(buffer *LocalBuffer, configHash string, client proto.Strin
 // addToBatch adds a record to the batch for a specific server configuration
 // Returns true if the batch was flushed, false otherwise
 func addToBatch(configHash string, record string, client proto.StringArrayServiceClient) (bool, error) {
+	// If record is empty, skip it
+	if record == "" {
+		return false, nil
+	}
+
 	recordSize := int64(len(record))
 
 	// Get the local buffer for this goroutine
@@ -476,6 +507,11 @@ func addToBatch(configHash string, record string, client proto.StringArrayServic
 		return false, nil
 	}
 
+	// Check if client is nil before flushing
+	if client == nil {
+		return false, fmt.Errorf("cannot flush to batch: gRPC client is nil")
+	}
+
 	// Local buffer reached threshold, flush it to shared batch
 	err := flushLocalBuffer(buffer, configHash, client)
 	if err != nil {
@@ -487,6 +523,11 @@ func addToBatch(configHash string, record string, client proto.StringArrayServic
 
 // flushBatch forces a flush of all local buffers and the shared batch for a config hash
 func flushBatch(configHash string, client proto.StringArrayServiceClient) error {
+	// Check if client is nil before attempting to flush
+	if client == nil {
+		return fmt.Errorf("cannot flush batch: gRPC client is nil")
+	}
+
 	// First, flush all local buffers that match this configHash
 	var localBuffersToFlush []*LocalBuffer
 
@@ -546,9 +587,27 @@ func sendRecords(records []string, client proto.StringArrayServiceClient) error 
 		return nil
 	}
 
+	// Add nil check for client
+	if client == nil {
+		return fmt.Errorf("cannot send records: gRPC client is nil")
+	}
+
+	// Filter out any nil strings from records
+	validRecords := make([]string, 0, len(records))
+	for _, record := range records {
+		if record != "" {
+			validRecords = append(validRecords, record)
+		}
+	}
+
+	// Skip if all records were empty after filtering
+	if len(validRecords) == 0 {
+		return nil
+	}
+
 	// Create request with all records
 	req := &proto.StringArrayRequest{
-		Messages: records,
+		Messages: validRecords,
 	}
 
 	// Send to gRPC server with timeout

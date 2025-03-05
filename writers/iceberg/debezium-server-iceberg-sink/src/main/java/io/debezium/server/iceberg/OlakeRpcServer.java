@@ -44,6 +44,9 @@ public class OlakeRpcServer {
         ObjectMapper objectMapper = new ObjectMapper();
         Map<String, String> configMap = objectMapper.readValue(jsonConfig, new TypeReference<Map<String, String>>() {
         });
+        
+        // Simplified logging setup - console only
+        System.out.println("Logs will be output to console only");
 
         configMap.forEach(hadoopConf::set);
         icebergProperties.putAll(configMap);

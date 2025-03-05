@@ -61,28 +61,29 @@ func (m *MySQL) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 }
 
 func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.Chunk]) error {
-	// Get primary key column using the provided function
-	pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
-	if pkColumn == "" {
-		return fmt.Errorf("no primary key found for stream %s", stream.ID())
-	}
+	return m.withIsolation(context.Background(), func(tx *sql.Tx) error {
+		// Get primary key column using the provided function
+		pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
+		if pkColumn == "" {
+			return fmt.Errorf("no primary key found for stream %s", stream.ID())
+		}
 
-	// Get table extremes
-	minVal, maxVal, err := m.getTableExtremes(stream, pkColumn)
-	if err != nil {
-		return err
-	}
+		// Get table extremes
+		minVal, maxVal, err := m.getTableExtremes(stream, pkColumn, tx)
+		if err != nil {
+			return err
+		}
 
-	logger.Infof("Stream %s extremes - min: %v, max: %v", stream.ID(), minVal, maxVal)
+		logger.Infof("Stream %s extremes - min: %v, max: %v", stream.ID(), minVal, maxVal)
 
-	//Calculate optimal chunk size based on table statistics
-	chunkSize, err := m.calculateChunksSize(stream)
-	if err != nil {
-		return fmt.Errorf("failed to calculate chunk size: %w", err)
-	}
-	fmt.Println("chunkSize", chunkSize)
-	// Generate chunks based on range
-	query := fmt.Sprintf(`
+		//Calculate optimal chunk size based on table statistics
+		chunkSize, err := m.calculateChunksSize(stream)
+		if err != nil {
+			return fmt.Errorf("failed to calculate chunk size: %w", err)
+		}
+		fmt.Println("chunkSize", chunkSize)
+		// Generate chunks based on range
+		query := fmt.Sprintf(`
     SELECT MAX(%[1]s) 
       FROM (
 	SELECT %[1]s 
@@ -93,36 +94,37 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 ) AS subquery
 `, pkColumn, stream.Namespace(), stream.Name())
 
-	var currentVal interface{} = minVal
-	for {
-		var nextValRaw interface{}
-		err := m.db.QueryRow(query, currentVal, chunkSize).Scan(&nextValRaw)
-		if err != nil || nextValRaw == nil {
-			// Add final chunk
+		var currentVal interface{} = minVal
+		for {
+			var nextValRaw interface{}
+			err := tx.QueryRow(query, currentVal, chunkSize).Scan(&nextValRaw)
+			if err != nil || nextValRaw == nil {
+				// Add final chunk
+				chunks.Insert(types.Chunk{
+					Min: convertToString(currentVal),
+					Max: convertToString(maxVal),
+				})
+				break
+			}
+			nextVal := convertToString(nextValRaw)
 			chunks.Insert(types.Chunk{
 				Min: convertToString(currentVal),
-				Max: convertToString(maxVal),
+				Max: nextVal,
 			})
-			break
+			currentVal = nextVal
 		}
-		nextVal := convertToString(nextValRaw)
-		chunks.Insert(types.Chunk{
-			Min: convertToString(currentVal),
-			Max: nextVal,
-		})
-		currentVal = nextVal
-	}
 
-	return nil
+		return nil
+	})
 }
-func (m *MySQL) getTableExtremes(stream protocol.Stream, pkColumn string) (min, max any, err error) {
+func (m *MySQL) getTableExtremes(stream protocol.Stream, pkColumn string, tx *sql.Tx) (min, max any, err error) {
 	query := fmt.Sprintf(`
 		SELECT 
 			MIN(%[1]s) as min_val,
 			MAX(%[1]s) as max_val 
 		FROM %[2]s.%[3]s
 	`, pkColumn, stream.Namespace(), stream.Name())
-	err = m.db.QueryRow(query).Scan(&min, &max)
+	err = tx.QueryRow(query).Scan(&min, &max)
 	if err != nil {
 		return "", "", err
 	}
@@ -142,74 +144,76 @@ func convertToString(value interface{}) string {
 }
 
 func (m *MySQL) processChunk(ctx context.Context, pool *protocol.WriterPool, stream protocol.Stream, chunk types.Chunk) error {
-	pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
-	if pkColumn == "" {
-		return fmt.Errorf("no primary key found for stream %s", stream.ID())
-	}
+	return m.withIsolation(ctx, func(tx *sql.Tx) error {
+		pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
+		if pkColumn == "" {
+			return fmt.Errorf("no primary key found for stream %s", stream.ID())
+		}
 
-	query := fmt.Sprintf(`
+		query := fmt.Sprintf(`
 		SELECT * 
 		FROM %s.%s 
 		WHERE %s > ? AND %s <= ?
 		ORDER BY %s
 	`, stream.Namespace(), stream.Name(), pkColumn, pkColumn, pkColumn)
 
-	rows, err := m.db.QueryContext(ctx, query, chunk.Min, chunk.Max)
-	if err != nil {
-		return fmt.Errorf("failed to query chunk: %w", err)
-	}
-	defer rows.Close()
-
-	columns, err := rows.Columns()
-	if err != nil {
-		return fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	// Create wait channel for writer thread
-	waitChan := make(chan error, 1)
-	writer, err := pool.NewThread(ctx, stream, protocol.WithWaitChannel(waitChan))
-	if err != nil {
-		return fmt.Errorf("failed to create writer thread: %w", err)
-	}
-	defer func() {
-		writer.Close()
-		// Wait for chunk completion
-		if werr := <-waitChan; werr != nil {
-			err = werr
-		}
-	}()
-
-	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		// Convert to map
-		record := make(map[string]interface{})
-		for i, col := range columns {
-			record[col] = values[i]
-		}
-
-		// Calculate record hash using primary key
-		recordHash := utils.GetKeysHash(record, pkColumn)
-
-		// Create and insert record
-		exit, err := writer.Insert(types.CreateRawRecord(recordHash, record, time.Now().UnixNano()))
+		rows, err := m.db.QueryContext(ctx, query, chunk.Min, chunk.Max)
 		if err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("failed to query chunk: %w", err)
 		}
-		if exit {
-			return nil
-		}
-	}
+		defer rows.Close()
 
-	return rows.Err()
+		columns, err := rows.Columns()
+		if err != nil {
+			return fmt.Errorf("failed to get columns: %w", err)
+		}
+
+		// Create wait channel for writer thread
+		waitChan := make(chan error, 1)
+		writer, err := pool.NewThread(ctx, stream, protocol.WithWaitChannel(waitChan))
+		if err != nil {
+			return fmt.Errorf("failed to create writer thread: %w", err)
+		}
+		defer func() {
+			writer.Close()
+			// Wait for chunk completion
+			if werr := <-waitChan; werr != nil {
+				err = werr
+			}
+		}()
+
+		for rows.Next() {
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range values {
+				valuePtrs[i] = &values[i]
+			}
+
+			if err := rows.Scan(valuePtrs...); err != nil {
+				return fmt.Errorf("failed to scan row: %w", err)
+			}
+
+			// Convert to map
+			record := make(map[string]interface{})
+			for i, col := range columns {
+				record[col] = values[i]
+			}
+
+			// Calculate record hash using primary key
+			recordHash := utils.GetKeysHash(record, pkColumn)
+
+			// Create and insert record
+			exit, err := writer.Insert(types.CreateRawRecord(recordHash, record, time.Now().UnixNano()))
+			if err != nil {
+				return fmt.Errorf("failed to insert record: %w", err)
+			}
+			if exit {
+				return nil
+			}
+		}
+
+		return rows.Err()
+	})
 }
 
 func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
@@ -224,4 +228,17 @@ func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 
 	}
 	return totalRecords / (m.config.MaxThreads * 8), nil
+}
+func (m *MySQL) withIsolation(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

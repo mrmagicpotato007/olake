@@ -73,6 +73,11 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 		if err != nil {
 			return err
 		}
+		chunks.Insert(types.Chunk{
+			Min: "",
+			Max: convertToString(minVal),
+		},
+		)
 
 		logger.Infof("Stream %s extremes - min: %v, max: %v", stream.ID(), minVal, maxVal)
 

@@ -43,6 +43,9 @@ import java.util.stream.Collectors;
 public class IcebergTableOperator {
 
   IcebergTableWriterFactory writerFactory2;
+  
+  // Static lock object for synchronizing commits across threads
+  private static final Object COMMIT_LOCK = new Object();
 
   public IcebergTableOperator() {
     createIdentifierFields = true;
@@ -205,27 +208,26 @@ public class IcebergTableOperator {
    * @param events
    */
   private void addToTablePerSchema(Table icebergTable, List<RecordConverter> events) {
-    int maxRetries = 5;
-    int retryDelayMs = 2000;
+    // Remove retry logic and add synchronization
     
+    // Initialize the task writer
+    BaseTaskWriter<Record> writer = writerFactory2.create(icebergTable);
+    try {
+      
+      // Write all events
+      for (RecordConverter e : events) {
+        final RecordWrapper record = (upsert && !icebergTable.schema().identifierFieldIds().isEmpty()) 
+            ? e.convert(icebergTable.schema(), cdcOpField) 
+            : e.convertAsAppend(icebergTable.schema());
+        writer.write(record);
+      }
 
-    // TODO: Still the concurrent write exception is happening even if we run on upsert false or true. Need to fix
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      // Initialize a task writer for each attempt
-      BaseTaskWriter<Record> writer = writerFactory2.create(icebergTable);
-      try {
-        // Refresh table state before attempting write and commit
+      WriteResult files = writer.complete();
+      
+      // Synchronize the commit operation to prevent concurrent commits
+      synchronized(COMMIT_LOCK) {
+        // Refresh table again before committing to get the latest state
         icebergTable.refresh();
-        
-        // Write all events
-        for (RecordConverter e : events) {
-          final RecordWrapper record = (upsert && !icebergTable.schema().identifierFieldIds().isEmpty()) 
-              ? e.convert(icebergTable.schema(), cdcOpField) 
-              : e.convertAsAppend(icebergTable.schema());
-          writer.write(record);
-        }
-
-        WriteResult files = writer.complete();
         
         if (files.deleteFiles().length > 0) {
           RowDelta newRowDelta = icebergTable.newRowDelta();
@@ -237,48 +239,34 @@ public class IcebergTableOperator {
           Arrays.stream(files.dataFiles()).forEach(appendFiles::appendFile);
           appendFiles.commit();
         }
-        
-        LOGGER.info("Successfully committed {} events on attempt {}", events.size(), attempt);
-        return;
-        
-      } catch (org.apache.iceberg.exceptions.CommitFailedException e) {
-        String errorMessage = e.getMessage();
-        LOGGER.warn("Commit attempt {} failed: {}", attempt, errorMessage);
-        
-        try {
-          writer.abort();
-        } catch (IOException abortEx) {
-          LOGGER.warn("Failed to abort writer on attempt {}", attempt, abortEx);
-        }
-        
-        if (attempt == maxRetries) {
-          LOGGER.error("Failed to commit after {} attempts. Last error: {}", maxRetries, errorMessage);
-          throw new DebeziumException("Failed to commit after " + maxRetries + " attempts", e);
-        }
-        
-        try {
-          LOGGER.info("Waiting {} ms before retry attempt {}", retryDelayMs, attempt + 1);
-          Thread.sleep(retryDelayMs);
-          // Exponential backoff with a maximum of 10 seconds
-          retryDelayMs = Math.min(retryDelayMs * 2, 10000);
-        } catch (InterruptedException ie) {
-          Thread.currentThread().interrupt();
-          throw new DebeziumException("Retry interrupted", ie);
-        }
-        
-      } catch (IOException ex) {
-        try {
-          writer.abort();
-        } catch (IOException e) {
-          LOGGER.warn("Failed to abort writer", e);
-        }
-        throw new DebeziumException("Failed to write data to table: " + icebergTable.name(), ex);
-      } finally {
-        try {
-          writer.close();
-        } catch (IOException e) {
-          LOGGER.warn("Failed to close writer", e);
-        }
+      }
+      
+      LOGGER.info("Successfully committed {} events", events.size());
+      
+    } catch (org.apache.iceberg.exceptions.CommitFailedException e) {
+      String errorMessage = e.getMessage();
+      LOGGER.error("Commit failed: {}", errorMessage);
+      
+      try {
+        writer.abort();
+      } catch (IOException abortEx) {
+        LOGGER.warn("Failed to abort writer", abortEx);
+      }
+      
+      throw new DebeziumException("Failed to commit", e);
+      
+    } catch (IOException ex) {
+      try {
+        writer.abort();
+      } catch (IOException e) {
+        LOGGER.warn("Failed to abort writer", e);
+      }
+      throw new DebeziumException("Failed to write data to table: " + icebergTable.name(), ex);
+    } finally {
+      try {
+        writer.close();
+      } catch (IOException e) {
+        LOGGER.warn("Failed to close writer", e);
       }
     }
   }

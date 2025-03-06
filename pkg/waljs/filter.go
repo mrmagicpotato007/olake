@@ -63,7 +63,7 @@ func (c ChangeFilter) FilterChange(lsn pglogrepl.LSN, change []byte, OnFiltered 
 			Schema:    ch.Schema,
 			Table:     ch.Table,
 			Timestamp: changes.Timestamp,
-			LSN:       &lsn,
+			LSN:       lsn,
 			Data:      changesMap,
 		})
 

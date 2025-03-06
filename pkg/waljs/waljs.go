@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"time"
-
 	"github.com/datazip-inc/olake/logger"
 	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jmoiron/sqlx"
+	"time"
 )
 
 const (
@@ -25,67 +23,60 @@ var pluginArguments = []string{
 }
 
 type Socket struct {
-	*Config
-	pgConn                *pgconn.PgConn
-	pgxConn               *pgx.Conn
-	clientXLogPos         pglogrepl.LSN
-	idleStartTime         time.Time
-	standbyMessageTimeout time.Duration
-	changeFilter          ChangeFilter
-	RestartLSN            pglogrepl.LSN
+	pgConn          *pgconn.PgConn
+	clientXLogPos   pglogrepl.LSN
+	idleStartTime   time.Time
+	changeFilter    ChangeFilter
+	RestartLSN      pglogrepl.LSN
+	replicationSlot string
+	initialWaitTime time.Duration
 }
 
 func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
-	conn, err := pgx.Connect(context.Background(), config.Connection.String())
-	if err != nil {
-		return nil, err
-	}
+	// Build PostgreSQL connection config
+	connURL := config.Connection
+	q := connURL.Query()
+	q.Set("replication", "database")
+	connURL.RawQuery = q.Encode()
 
-	query := config.Connection.Query()
-	query.Add("replication", "database")
-	config.Connection.RawQuery = query.Encode()
-
-	cfg, err := pgconn.ParseConfig(config.Connection.String())
+	cfg, err := pgconn.ParseConfig(connURL.String())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("connection config error: %w", err)
 	}
 
 	if config.TLSConfig != nil {
-		cfg.TLSConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
+		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
-	dbConn, err := pgconn.ConnectConfig(context.Background(), cfg)
+	// Establish PostgreSQL connection
+	pgConn, err := pgconn.ConnectConfig(context.Background(), cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("postgres connection failed: %w", err)
 	}
 
-	connection := &Socket{
-		Config:                config,
-		standbyMessageTimeout: time.Second,
-		pgConn:                dbConn,
-		pgxConn:               conn,
-		changeFilter:          NewChangeFilter(config.Tables.Array()...),
-	}
-
-	sysident, err := pglogrepl.IdentifySystem(context.Background(), connection.pgConn)
+	// System identification
+	sysident, err := pglogrepl.IdentifySystem(context.Background(), pgConn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to identify the system: %s", err)
+		return nil, fmt.Errorf("system identification failed: %w", err)
+	}
+	logger.Infof("SystemID:%s Timeline:%d XLogPos:%s Database:%s",
+		sysident.SystemID, sysident.Timeline, sysident.XLogPos, sysident.DBName)
+
+	// Get replication slot position
+	var slot ReplicationSlot
+	if err := db.Get(&slot, fmt.Sprintf(ReplicationSlotTempl, config.ReplicationSlotName)); err != nil {
+		return nil, fmt.Errorf("replication slot error: %w", err)
 	}
 
-	logger.Infof("system identification result SystemID:%s, Timeline: %d, XLogPos: %s, Database: %s", sysident.SystemID, sysident.Timeline, sysident.XLogPos, sysident.DBName)
-
-	slot := ReplicationSlot{}
-	err = db.Get(&slot, fmt.Sprintf(ReplicationSlotTempl, config.ReplicationSlotName))
-	if err != nil {
-		return nil, err
-	}
-
-	connection.RestartLSN = slot.LSN
-	connection.clientXLogPos = slot.LSN
-
-	return connection, err
+	// Create and return final connection object
+	return &Socket{
+		pgConn:          pgConn,
+		changeFilter:    NewChangeFilter(config.Tables.Array()...),
+		RestartLSN:      slot.LSN,
+		clientXLogPos:   slot.LSN,
+		replicationSlot: config.ReplicationSlotName,
+		initialWaitTime: config.InitialWaitTime,
+	}, nil
 }
 
 // Confirm that Logs has been recorded
@@ -108,13 +99,13 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 	if err := pglogrepl.StartReplication(
 		context.Background(),
 		s.pgConn,
-		s.ReplicationSlotName,
+		s.replicationSlot,
 		s.RestartLSN,
 		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments},
 	); err != nil {
 		return fmt.Errorf("starting replication slot failed: %s", err)
 	}
-	logger.Infof("Started logical replication on slot[%s]", s.ReplicationSlotName)
+	logger.Infof("Started logical replication on slot[%s]", s.replicationSlot)
 	s.idleStartTime = time.Now()
 
 	for {
@@ -122,8 +113,8 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 		case <-ctx.Done():
 			return nil
 		default:
-			if time.Since(s.idleStartTime) > s.InitialWaitTime {
-				logger.Debug("Idle timeout reached, waiting for new messages")
+			if time.Since(s.idleStartTime) > s.initialWaitTime {
+				logger.Debug("Idle timeout reached while waiting for new messages")
 				return nil
 			}
 			// Use a context with timeout for receiving a message.
@@ -173,5 +164,4 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 // cleanUpOnFailure drops replication slot and publication if database snapshotting was failed for any reason
 func (s *Socket) Cleanup() {
 	s.pgConn.Close(context.TODO())
-	s.pgxConn.Close(context.TODO())
 }

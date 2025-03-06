@@ -60,6 +60,13 @@ func ArrayContains[T any](set []T, match func(elem T) bool) (int, bool) {
 	return -1, false
 }
 
+func IfThenElse(cond bool, a, b int64) int64 {
+	if cond {
+		return a
+	}
+	return b
+}
+
 // Unmarshal serializes and deserializes any from into the object
 // return error if occurred
 func Unmarshal(from, object any) error {

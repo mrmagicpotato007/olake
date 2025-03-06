@@ -14,10 +14,10 @@ type Driver struct {
 	CDCSupport    bool     // Used in CDC mode
 }
 
-var CDCColumns = map[string]types.DataType{
-	constants.CDCDeletedAt: types.Timestamp,
-	constants.CDCLSN:       types.String,
-	constants.CDCUpdatedAt: types.Timestamp,
+var DefaultColumns = map[string]types.DataType{
+	constants.CDCDeletedAt:   types.Timestamp,
+	constants.OlakeID:        types.String,
+	constants.OlakeTimestamp: types.Int64,
 }
 
 func (d *Driver) ChangeStreamSupported() bool {

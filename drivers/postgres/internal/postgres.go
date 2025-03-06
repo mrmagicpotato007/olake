@@ -228,7 +228,7 @@ func (p *Postgres) populateStream(table Table) (*types.Stream, error) {
 
 	// cdc additional fields
 	if p.Driver.CDCSupport {
-		for column, typ := range base.CDCColumns {
+		for column, typ := range base.DefaultColumns {
 			stream.UpsertField(column, typ, true)
 		}
 	}

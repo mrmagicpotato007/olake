@@ -3,7 +3,6 @@ package utils
 import "database/sql"
 
 func MapScan(rows *sql.Rows, dest map[string]any) error {
-	// Scan each row and store data in a map
 	columns, err := rows.Columns()
 	if err != nil {
 		return err
@@ -11,16 +10,15 @@ func MapScan(rows *sql.Rows, dest map[string]any) error {
 
 	scanValues := make([]any, len(columns))
 	for i := range scanValues {
-		scanValues[i] = new(any)
+		scanValues[i] = new(any) // Allocate pointers for scanning
 	}
 
-	err = rows.Scan(scanValues...)
-	if err != nil {
+	if err := rows.Scan(scanValues...); err != nil {
 		return err
 	}
 
-	for i, val := range scanValues {
-		dest[columns[i]] = val
+	for i, col := range columns {
+		dest[col] = *(scanValues[i].(*any)) // Dereference pointer before storing
 	}
 
 	return nil

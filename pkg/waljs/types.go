@@ -38,7 +38,7 @@ type ReplicationSlot struct {
 type WalJSChange struct {
 	Stream    protocol.Stream
 	Timestamp typeutils.Time
-	LSN       *pglogrepl.LSN
+	LSN       pglogrepl.LSN
 	Kind      string
 	Schema    string
 	Table     string

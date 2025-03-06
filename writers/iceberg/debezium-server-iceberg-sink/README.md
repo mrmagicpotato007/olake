@@ -1,77 +1,69 @@
-# Debezium Server Iceberg Sink
 
-This project provides an Iceberg sink for Debezium Server, allowing change data capture (CDC) events to be written to Iceberg tables.
+# Java Iceberg Sink
 
-## File Size Management Options
+This project is a fork and modified version of the [debezium-server-iceberg](https://github.com/memiiso/debezium-server-iceberg) project, originally used to dump data from Debezium Server into Iceberg. The modifications make it compatible with Olake by sending data in Debezium format.
 
-This project offers two approaches to optimize Iceberg table writes based on Parquet file size:
+## Architecture
 
-### 1. Dynamic File Size Management (Recommended)
+The data flow in this project is as follows:
 
-The `iceberg-dynamic` consumer leverages Iceberg's native file size management capabilities:
 
-```properties
-# Use the dynamic file size consumer
-debezium.sink.type=iceberg-dynamic
+Golang Code  --gRPC-->  Java (This Project)  --Write to Iceberg-->  S3 + Iceberg Catalog
 
-# Set the target file size in MB (default: 256)
-debezium.sink.iceberg.target-file-size-mb=256
+Check out the Olake Iceberg Writer code to understand how data is sent to Java via gRPC.
 
-# Set the commit interval in milliseconds (default: 60000)
-debezium.sink.iceberg.commit-interval-ms=60000
+## Prerequisites
+
+- **Java 17** must be installed.
+
+## Running the Project
+
+### VSCode Debug Configuration
+
+Set up the following configuration in your VSCode debug console:
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "OlakeRpcServer",
+            "request": "launch",
+            "mainClass": "io.debezium.server.iceberg.OlakeRpcServer",
+            "projectName": "iceberg-sink",
+            "args": [
+                "{\"jdbc.password\":\"my_password\",\"s3.path-style-access\":\"true\",\"jdbc.user\":\"my_user\",\"io-impl\":\"org.apache.iceberg.aws.s3.S3FileIO\",\"catalog-impl\":\"org.apache.iceberg.aws.glue.GlueCatalog\",\"upsert\":\"true\",\"table-namespace\":\"olake_iceberg\",\"catalog-name\":\"olake_iceberg\",\"warehouse\":\"s3://bucket-name/olake_iceberg/test_olake\",\"uri\":\"jdbc_db_url\",\"glue.region\":\"ap-south-1\",\"s3.secret-access-key\":\"XXX\",\"s3.access-key-id\":\"XXX\",\"upsert-keep-deletes\":\"true\",\"write.format.default\":\"parquet\",\"table-prefix\":\"\"}"
+            ]
+        }
+    ]
+}
 ```
 
-#### How It Works
+> **Important:** Replace the following fields with your actual configuration values:
+> - `s3.secret-access-key`
+> - `s3.access-key-id`
+> - `warehouse`
 
-1. **Native Iceberg Integration**: Sets the `write.target-file-size-bytes` property directly on Iceberg tables.
-2. **Time-based Commits**: Flushes data based on a configurable time interval.
-3. **Accumulation**: Maintains buffers of records per table that are committed at appropriate intervals.
-4. **Let Iceberg Handle It**: Relies on Iceberg's built-in mechanisms to manage file sizes.
+This configuration is designed for AWS Glue and S3-based Iceberg settings. Ensure that the generated credentials have full access to both Glue and the specified S3 bucket.
 
-#### Benefits
+### Functionality
 
-- **Fully Dynamic**: Uses Iceberg's native file size management
-- **More Resilient**: Less complex batching logic reduces potential issues
-- **Better Integration**: Works directly with Iceberg's internal mechanisms
-- **Tunable**: Can be adjusted through simple configuration
+When you run the project, it will:
+- Spin up a gRPC server ready to accept records in Debezium format.
 
-### 2. Estimated Size-based Batching (Alternative)
+## Testing in Standalone Mode
 
-The `ParquetSizeWait` approach (for use with the standard `iceberg` consumer) estimates file sizes and controls batch timing:
+To test the project independently, follow these steps:
 
-```properties
-# Use the standard consumer with ParquetSizeWait
-debezium.sink.type=iceberg
-debezium.sink.batch.batch-size-wait=ParquetSizeWait
+1. Download the test files as a ZIP from [this gist](https://gist.github.com/shubham19may/b820daf21fdfae2c648204889ab62fc7).
+2. Unzip the downloaded file.
+3. After starting the Java server, run the Golang main file using the following command:
 
-# Set the target Parquet file size in MB (default: 256)
-debezium.sink.batch.parquet-size-wait.target-size-mb=256
+   ```bash
+   go run main.go messaging.pb.go messaging_grpc.pb.go
+   ```
 
-# Set the estimated average record size in bytes (default: 1024)
-debezium.sink.batch.parquet-size-wait.avg-record-size-bytes=1024
-
-# Optionally configure the target file size directly for Iceberg (in MB)
-debezium.sink.iceberg.target-file-size-mb=256
-```
-
-#### How It Works
-
-1. **Size Estimation**: Accumulates records and estimates total size based on configured average record size.
-2. **Write Triggering**: Writes to Iceberg when either:
-   - Estimated size reaches target (default 256MB)
-   - No more records are available in queue
-
-## Considerations for Choosing an Approach
-
-- **Dynamic Approach**: Best for production environments where you want Iceberg to handle file size management 
-  natively without external estimation.
-
-- **Estimated Approach**: Useful when you need more control over exactly when commits happen, but relies on 
-  accurate size estimation.
-
-For most use cases, the dynamic approach is recommended as it provides better integration with Iceberg's 
-internal mechanisms.
-
-## Other Configuration
-
-For other configuration options, please refer to the Debezium Server and Iceberg documentation. 
+This test will:
+- Create an Iceberg table named `incr1111` in the `olake_iceberg` database.
+- Insert one record into the table.

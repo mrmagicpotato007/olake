@@ -182,7 +182,7 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	var rowCount int
 
 	// Prepare a sample query to get some data
-	sampleQuery := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT 10", schemaName, tableName)
+	sampleQuery := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT 1", schemaName, tableName)
 	sampleRows, err := m.db.QueryContext(ctx, sampleQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query sample data: %w", err)

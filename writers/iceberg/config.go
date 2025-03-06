@@ -43,14 +43,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("failed to get current directory: %v", err)
 		}
 
-		logger.Infof("Current working directory: %s", execDir)
-
 		// Remove /drivers/* from execDir if present
 		if idx := strings.LastIndex(execDir, "/drivers/"); idx != -1 {
 			execDir = execDir[:idx]
 		}
-
-		logger.Infof("Current working directory: %s", execDir)
 
 		// First, check if the JAR exists in the base directory
 		baseJarPath := fmt.Sprintf("%s/debezium-server-iceberg-sink.jar", execDir)
@@ -72,7 +68,7 @@ func (c *Config) Validate() error {
 					c.JarPath = fallbackPath
 				} else {
 					// Throw error if JAR is not found in any location
-					return fmt.Errorf("Iceberg JAR file not found in any of the expected locations: %s, %s, or %s",
+					return fmt.Errorf("Iceberg JAR file not found in any of the expected locations: %s, %s, or %s. Go to drivers/iceberg/debezium-server-iceberg-sink/target/ directory and run mvn clean package -DskipTests",
 						baseJarPath, targetJarPath, fallbackPath)
 				}
 			}

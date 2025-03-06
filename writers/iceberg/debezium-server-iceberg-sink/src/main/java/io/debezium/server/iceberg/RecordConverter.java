@@ -11,7 +11,6 @@ package io.debezium.server.iceberg;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.debezium.DebeziumException;
 import io.debezium.server.iceberg.tableoperator.Operation;
 import io.debezium.server.iceberg.tableoperator.RecordWrapper;
 import org.apache.iceberg.Schema;
@@ -80,19 +79,19 @@ public class RecordConverter {
 
     final JsonNode element = value().get(cdcSourceTsMsField);
     if (element == null) {
-      throw new DebeziumException("Field '" + cdcSourceTsMsField + "' not found in JSON object: " + value());
+      throw new RuntimeException("Field '" + cdcSourceTsMsField + "' not found in JSON object: " + value());
     }
 
     try {
       return element.asLong();
     } catch (NumberFormatException e) {
-      throw new DebeziumException("Error converting field '" + cdcSourceTsMsField + "' value '" + element + "' to Long: " + e.getMessage(), e);
+      throw new RuntimeException("Error converting field '" + cdcSourceTsMsField + "' value '" + element + "' to Long: " + e.getMessage(), e);
     }
   }
 
   public Operation cdcOpValue(String cdcOpField) {
     if (!value().has(cdcOpField)) {
-      throw new DebeziumException("The value for field `" + cdcOpField + "` is missing. " +
+      throw new RuntimeException("The value for field `" + cdcOpField + "` is missing. " +
           "This field is required when updating or deleting data, when running in upsert mode."
       );
     }
@@ -106,7 +105,7 @@ public class RecordConverter {
       case "c" -> Operation.INSERT;
       case "i" -> Operation.INSERT;
       default ->
-          throw new DebeziumException("Unexpected `" + cdcOpField + "=" + opFieldValue + "` operation value received, expecting one of ['u','d','r','c', 'i']");
+          throw new RuntimeException("Unexpected `" + cdcOpField + "=" + opFieldValue + "` operation value received, expecting one of ['u','d','r','c', 'i']");
     };
   }
 
@@ -114,7 +113,7 @@ public class RecordConverter {
     try {
       return new SchemaConverter(mapper.readTree(valueData).get("schema"), keyData == null ? null : mapper.readTree(keyData).get("schema"));
     } catch (IOException e) {
-      throw new DebeziumException("Failed to get event schema", e);
+      throw new RuntimeException("Failed to get event schema", e);
     }
   }
 
@@ -316,7 +315,7 @@ public class RecordConverter {
           return schemaData;
         case "map":
           if (isPkField) {
-            throw new DebeziumException("Cannot set map field '" + fieldName + "' as a identifier field, map types are not supported as an identifier field!");
+            throw new RuntimeException("Cannot set map field '" + fieldName + "' as a identifier field, map types are not supported as an identifier field!");
           }
           int rootMapId = schemaData.nextFieldId().getAndIncrement();
           int keyFieldId = schemaData.nextFieldId().getAndIncrement();
@@ -332,7 +331,7 @@ public class RecordConverter {
 
         case "array":
           if (isPkField) {
-            throw new DebeziumException("Cannot set array field '" + fieldName + "' as a identifier field, array types are not supported as an identifier field!");
+            throw new RuntimeException("Cannot set array field '" + fieldName + "' as a identifier field, array types are not supported as an identifier field!");
           }
           int rootArrayId = schemaData.nextFieldId().getAndIncrement();
           final RecordSchemaData arraySchemaData = schemaData.copyKeepIdentifierFieldIdsAndNextFieldId();
@@ -417,7 +416,7 @@ public class RecordConverter {
         // due to inconsistency in the after and before fields.
         // For insert events, only the `before` field is NULL, while for delete events after field is NULL.
         // This inconsistency prevents using either field as a reliable key.
-        throw new DebeziumException("Debezium events are unnested, Identifier fields are not supported for unnested events! " +
+        throw new RuntimeException("Debezium events are unnested, Identifier fields are not supported for unnested events! " +
             "Pleas enable event flattening SMT see: https://debezium.io/documentation/reference/stable/transformations/event-flattening.html " +
             " Or disable identifier field creation `debezium.sink.iceberg.create-identifier-fields=false`");
       }

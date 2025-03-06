@@ -2,8 +2,6 @@ package io.debezium.server.iceberg;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.debezium.serde.DebeziumSerdes;
-import io.debezium.server.iceberg.batchsizewait.InterfaceBatchSizeWait;
-import io.debezium.server.iceberg.batchsizewait.NoBatchSizeWait;
 import io.debezium.server.iceberg.rpc.OlakeRowsIngester;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
@@ -15,6 +13,8 @@ import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.type.TypeReference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.Map;
@@ -23,6 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Dependent
 public class OlakeRpcServer {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(OlakeRpcServer.class);
+    
     protected static final Serde<JsonNode> valSerde = DebeziumSerdes.payloadJson(JsonNode.class);
     protected static final Serde<JsonNode> keySerde = DebeziumSerdes.payloadJson(JsonNode.class);
     final static Configuration hadoopConf = new Configuration();
@@ -36,7 +38,7 @@ public class OlakeRpcServer {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
-            System.err.println("Please provide a JSON config as an argument.");
+            LOGGER.error("Please provide a JSON config as an argument.");
             System.exit(1);
         }
 
@@ -46,7 +48,7 @@ public class OlakeRpcServer {
         });
         
         // Simplified logging setup - console only
-        System.out.println("Logs will be output to console only");
+        LOGGER.info("Logs will be output to console only");
 
         configMap.forEach(hadoopConf::set);
         icebergProperties.putAll(configMap);
@@ -64,11 +66,6 @@ public class OlakeRpcServer {
         }
 
         icebergCatalog = CatalogUtil.buildIcebergCatalog(catalogName, icebergProperties, hadoopConf);
-
-        // TODO : change this to MaxBatchSizeWait based on config later
-
-        InterfaceBatchSizeWait batchSizeWait = new NoBatchSizeWait();
-        batchSizeWait.initizalize();
 
         // configure and set
         valSerde.configure(Collections.emptyMap(), false);
@@ -104,8 +101,9 @@ public class OlakeRpcServer {
                 .build()
                 .start();
 
-        System.out.println("Server started on port " + port + " with max message size: " + 
-                           (maxMessageSize / (1024 * 1024)) + "MB and configuration: " + configMap);
+        // Log server startup without exposing potentially sensitive configuration details
+        LOGGER.info("Server started on port {} with max message size: {}MB", 
+                    port, (maxMessageSize / (1024 * 1024)));
         server.awaitTermination();
     }
 

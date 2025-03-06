@@ -10,7 +10,6 @@ package io.debezium.server.iceberg;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.primitives.Ints;
-import io.debezium.DebeziumException;
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.literal.NamedLiteral;
 import org.apache.iceberg.FileFormat;
@@ -99,9 +98,9 @@ public class IcebergUtil {
 
     Instance<T> instance = instances.select(NamedLiteral.of(name));
     if (instance.isAmbiguous()) {
-      throw new DebeziumException("Multiple batch size wait class named '" + name + "' were found");
+      throw new RuntimeException("Multiple batch size wait class named '" + name + "' were found");
     } else if (instance.isUnsatisfied()) {
-      throw new DebeziumException("No batch size wait class named '" + name + "' is available");
+      throw new RuntimeException("No batch size wait class named '" + name + "' is available");
     }
 
     LOGGER.info("Using {}", instance.getClass().getName());

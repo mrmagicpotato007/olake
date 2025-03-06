@@ -10,7 +10,6 @@ package io.debezium.server.iceberg.tableoperator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.collect.ImmutableMap;
-import io.debezium.DebeziumException;
 import io.debezium.server.iceberg.RecordConverter;
 import jakarta.enterprise.context.Dependent;
 import jakarta.inject.Inject;
@@ -91,7 +90,7 @@ public class IcebergTableOperator {
 
     events.forEach(e -> {
           if (e.key() == null || e.key().isNull()) {
-            throw new DebeziumException("Cannot deduplicate data with null key! destination:'" + e.destination() + "' event: '" + e.value().toString() + "'");
+            throw new RuntimeException("Cannot deduplicate data with null key! destination:'" + e.destination() + "' event: '" + e.value().toString() + "'");
           }
 
       try {
@@ -104,7 +103,7 @@ public class IcebergTableOperator {
           }
         });
       } catch (Exception ex) {
-        throw new DebeziumException("Failed to deduplicate events", ex);
+        throw new RuntimeException("Failed to deduplicate events", ex);
       }
         }
     );
@@ -253,7 +252,7 @@ public class IcebergTableOperator {
         LOGGER.warn("Failed to abort writer", abortEx);
       }
       
-      throw new DebeziumException("Failed to commit", e);
+      throw new RuntimeException("Failed to commit", e);
       
     } catch (IOException ex) {
       try {
@@ -261,7 +260,7 @@ public class IcebergTableOperator {
       } catch (IOException e) {
         LOGGER.warn("Failed to abort writer", e);
       }
-      throw new DebeziumException("Failed to write data to table: " + icebergTable.name(), ex);
+      throw new RuntimeException("Failed to write data to table: " + icebergTable.name(), ex);
     } finally {
       try {
         writer.close();

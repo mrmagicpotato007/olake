@@ -7,16 +7,6 @@ import (
 	"github.com/datazip-inc/olake/types"
 )
 
-const CDCDeletedAt = "_cdc_deleted_at"
-const CDCLSN = "_cdc_lsn"
-const CDCUpdatedAt = "_cdc_updated_at"
-
-var CDCColumns = map[string]types.DataType{
-	CDCDeletedAt: types.Timestamp,
-	CDCLSN:       types.String,
-	CDCUpdatedAt: types.Timestamp,
-}
-
 func PostgresWithoutState(stream protocol.Stream) string {
 	return fmt.Sprintf(`SELECT * FROM "%s"."%s" ORDER BY %s`, stream.Namespace(), stream.Name(), stream.Cursor())
 }

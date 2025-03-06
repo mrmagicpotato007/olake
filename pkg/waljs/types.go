@@ -7,6 +7,7 @@ import (
 
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
+	"github.com/datazip-inc/olake/typeutils"
 	"github.com/jackc/pglogrepl"
 )
 
@@ -36,7 +37,7 @@ type ReplicationSlot struct {
 
 type WalJSChange struct {
 	Stream    protocol.Stream
-	Timestamp time.Time
+	Timestamp typeutils.Time
 	LSN       *pglogrepl.LSN
 	Kind      string
 	Schema    string
@@ -46,7 +47,7 @@ type WalJSChange struct {
 
 type WALMessage struct {
 	// NextLSN   pglogrepl.LSN `json:"nextlsn"`
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp typeutils.Time `json:"timestamp"`
 	Change    []struct {
 		Kind         string        `json:"kind"`
 		Schema       string        `json:"schema"`
@@ -62,4 +63,4 @@ type WALMessage struct {
 	} `json:"change"`
 }
 
-type OnMessage = func(message WalJSChange) (bool, error)
+type OnMessage = func(message WalJSChange) error

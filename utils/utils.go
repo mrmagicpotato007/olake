@@ -199,7 +199,6 @@ func ULID() string {
 func genULID(t time.Time) string {
 	ulidMutex.Lock()
 	defer ulidMutex.Unlock()
-	// TODO: Handle Error (Need to remove state and catalog print from logger)
 	newUlid, err := ulid.New(ulid.Timestamp(t), entropy)
 	if err != nil {
 		logger.Fatalf("failed to generate ulid: %s", err)

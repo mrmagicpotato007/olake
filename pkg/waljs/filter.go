@@ -15,7 +15,7 @@ type ChangeFilter struct {
 	tables map[string]protocol.Stream
 }
 
-type Filtered func(change WalJSChange)
+type Filtered func(change WalJSChange) error
 
 func NewChangeFilter(streams ...protocol.Stream) ChangeFilter {
 	filter := ChangeFilter{
@@ -57,7 +57,7 @@ func (c ChangeFilter) FilterChange(lsn pglogrepl.LSN, change []byte, OnFiltered 
 			}
 		}
 
-		OnFiltered(WalJSChange{
+		err := OnFiltered(WalJSChange{
 			Stream:    stream,
 			Kind:      ch.Kind,
 			Schema:    ch.Schema,
@@ -66,6 +66,10 @@ func (c ChangeFilter) FilterChange(lsn pglogrepl.LSN, change []byte, OnFiltered 
 			LSN:       &lsn,
 			Data:      changesMap,
 		})
+
+		if err != nil {
+			return fmt.Errorf("failed to write filtered changed: %s", err)
+		}
 	}
 
 	return nil

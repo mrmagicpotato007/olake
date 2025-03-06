@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/datazip-inc/olake/logger"
@@ -27,14 +26,13 @@ var pluginArguments = []string{
 
 type Socket struct {
 	*Config
-	pgConn                     *pgconn.PgConn
-	pgxConn                    *pgx.Conn
-	waiter                     *time.Timer
-	clientXLogPos              pglogrepl.LSN
-	standbyMessageTimeout      time.Duration
-	nextStandbyMessageDeadline time.Time
-	changeFilter               ChangeFilter
-	RestartLSN                 pglogrepl.LSN
+	pgConn                *pgconn.PgConn
+	pgxConn               *pgx.Conn
+	clientXLogPos         pglogrepl.LSN
+	idleStartTime         time.Time
+	standbyMessageTimeout time.Duration
+	changeFilter          ChangeFilter
+	RestartLSN            pglogrepl.LSN
 }
 
 func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
@@ -90,23 +88,6 @@ func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
 	return connection, err
 }
 
-func (s *Socket) StartReplication() error {
-	err := pglogrepl.StartReplication(context.Background(), s.pgConn, s.ReplicationSlotName, s.RestartLSN, pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments})
-	if err != nil {
-		return fmt.Errorf("starting replication slot failed: %s", err)
-	}
-	logger.Infof("Started logical replication on slot[%s]", s.ReplicationSlotName)
-
-	// Setup initial wait timeout to be the next message deadline to wait for a change log
-	s.nextStandbyMessageDeadline = time.Now().Add(s.InitialWaitTime + 2*time.Second)
-
-	logger.Debugf("Setting initial wait timer: %s", s.InitialWaitTime)
-	s.waiter = time.AfterFunc(s.InitialWaitTime, func() {
-		logger.Info("Closing sync. initial wait timer expired...")
-	})
-	return nil
-}
-
 // Confirm that Logs has been recorded
 func (s *Socket) AcknowledgeLSN() error {
 	err := pglogrepl.SendStandbyStatusUpdate(context.Background(), s.pgConn, pglogrepl.StandbyStatusUpdate{
@@ -122,99 +103,71 @@ func (s *Socket) AcknowledgeLSN() error {
 	return nil
 }
 
-func (s *Socket) increaseDeadline() {
-	s.nextStandbyMessageDeadline = time.Now().Add(s.standbyMessageTimeout)
-}
-
-func (s *Socket) deadlineCrossed() bool {
-	return time.Now().After(s.nextStandbyMessageDeadline)
-}
-
 func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
-	var cachedLSN *pglogrepl.LSN
-recordIterator:
+	// Start logical replication with wal2json plugin arguments.
+	if err := pglogrepl.StartReplication(
+		context.Background(),
+		s.pgConn,
+		s.ReplicationSlotName,
+		s.RestartLSN,
+		pglogrepl.StartReplicationOptions{PluginArgs: pluginArguments},
+	); err != nil {
+		return fmt.Errorf("starting replication slot failed: %s", err)
+	}
+	logger.Infof("Started logical replication on slot[%s]", s.ReplicationSlotName)
+	s.idleStartTime = time.Now()
+
 	for {
 		select {
 		case <-ctx.Done():
-			break recordIterator
+			return nil
 		default:
-			exit, err := func() (bool, error) {
-				if s.deadlineCrossed() {
-					// adjusting with function being retriggered when not even a single message has been received
-					s.increaseDeadline()
-					return true, nil
-				}
-
-				ctx, cancel := context.WithDeadline(context.Background(), s.nextStandbyMessageDeadline)
-				defer cancel()
-
-				rawMsg, err := s.pgConn.ReceiveMessage(ctx)
-				if err != nil {
-					if pgconn.Timeout(err) || err == io.EOF || err == io.ErrUnexpectedEOF {
-						return true, nil
-					}
-
-					return false, fmt.Errorf("failed to receive messages from PostgreSQL %s", err)
-				}
-
-				if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
-					return false, fmt.Errorf("received broken Postgres WAL. Error: %+v", errMsg)
-				}
-
-				msg, ok := rawMsg.(*pgproto3.CopyData)
-				if !ok {
-					return false, fmt.Errorf("received unexpected message: %T", rawMsg)
-				}
-
-				switch msg.Data[0] {
-				case pglogrepl.PrimaryKeepaliveMessageByteID:
-					pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
-					if err != nil {
-						return false, fmt.Errorf("ParsePrimaryKeepaliveMessage failed: %s", err)
-					}
-
-					if pkm.ReplyRequested {
-						s.nextStandbyMessageDeadline = time.Time{}
-					}
-
-				case pglogrepl.XLogDataByteID:
-					xld, err := pglogrepl.ParseXLogData(msg.Data[1:])
-					if err != nil {
-						return false, fmt.Errorf("ParseXLogData failed: %s", err)
-					}
-
-					// Cache LSN here to be used during acknowledgement
-					clientXLogPos := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
-					cachedLSN = &clientXLogPos
-					err = s.changeFilter.FilterChange(clientXLogPos, xld.WALData, func(change WalJSChange) {
-						callback(change)
-
-						// stop waiter after a record has been recieved
-						if s.waiter != nil {
-							s.waiter.Stop()
-						}
-					})
-					if err != nil {
-						return false, err
-					}
-				}
-				s.increaseDeadline()
-				return false, nil
-			}()
+			if time.Since(s.idleStartTime) > s.InitialWaitTime {
+				logger.Debug("Idle timeout reached, waiting for new messages")
+				return nil
+			}
+			// Use a context with timeout for receiving a message.
+			msg, err := s.pgConn.ReceiveMessage(ctx)
+			// If the receive timed out, log the idle state and continue waiting.
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to receive message: %w", err)
 			}
 
-			// acknowledge and exit only when we can acknowledge a LSN
-			// This helps in hooking till atleast getting one message from
-			if exit && cachedLSN != nil {
-				s.clientXLogPos = *cachedLSN
-				break recordIterator
+			// Process only CopyData messages.
+			copyData, ok := msg.(*pgproto3.CopyData)
+			if !ok {
+				return fmt.Errorf("unexpected message type: %T", msg)
+			}
+
+			switch copyData.Data[0] {
+			case pglogrepl.PrimaryKeepaliveMessageByteID:
+				// For keepalive messages, process them (but no ack is sent here).
+				_, err := pglogrepl.ParsePrimaryKeepaliveMessage(copyData.Data[1:])
+				if err != nil {
+					return fmt.Errorf("failed to parse primary keepalive message: %w", err)
+				}
+
+			case pglogrepl.XLogDataByteID:
+				// Reset the idle timer on receiving WAL data.
+				s.idleStartTime = time.Now()
+				xld, err := pglogrepl.ParseXLogData(copyData.Data[1:])
+				if err != nil {
+					return fmt.Errorf("failed to parse XLogData: %w", err)
+				}
+				// Calculate new LSN based on the received WAL data.
+				newLSN := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+				// Process change with the provided callback.
+				if err := s.changeFilter.FilterChange(newLSN, xld.WALData, callback); err != nil {
+					return fmt.Errorf("failed to filter change: %w", err)
+				}
+				// Update the current LSN pointer.
+				s.clientXLogPos = newLSN
+
+			default:
+				logger.Debugf("Received unhandled message type: %v", copyData.Data[0])
 			}
 		}
 	}
-
-	return nil
 }
 
 // cleanUpOnFailure drops replication slot and publication if database snapshotting was failed for any reason

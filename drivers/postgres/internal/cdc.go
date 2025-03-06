@@ -5,28 +5,26 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/datazip-inc/olake/constants"
 	"github.com/datazip-inc/olake/drivers/base"
-	"github.com/datazip-inc/olake/pkg/jdbc"
 	"github.com/datazip-inc/olake/pkg/waljs"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
 	"github.com/jackc/pglogrepl"
-
-	// "github.com/jackc/pglogrepl"
 	"github.com/jmoiron/sqlx"
 )
 
 func (p *Postgres) prepareWALJSConfig(streams ...protocol.Stream) (*waljs.Config, error) {
 	if !p.Driver.CDCSupport {
-		return nil, fmt.Errorf("Invalid call; %s not running in CDC mode", p.Type())
+		return nil, fmt.Errorf("invalid call; %s not running in CDC mode", p.Type())
 	}
 
 	config := &waljs.Config{
 		Connection:          *p.config.Connection,
 		ReplicationSlotName: p.cdcConfig.ReplicationSlot,
 		InitialWaitTime:     time.Duration(p.cdcConfig.InitialWaitTime) * time.Second,
-		Tables:              types.NewSet[protocol.Stream](),
+		Tables:              types.NewSet[protocol.Stream](streams...),
 		BatchSize:           p.config.BatchSize,
 	}
 	return config, nil
@@ -61,25 +59,34 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 		return err
 	}
 	defer socket.Cleanup()
-	health := p.cdcState.State.LSN
-	fmt.Println("here health: ", health)
+	fullLoad := func() error {
+		// TODO: Save Global state
+		return utils.Concurrent(cdcCtx, streams, len(streams), func(ctx context.Context, stream protocol.Stream, _ int) error {
+			err := p.backfill(pool, stream)
+			if err != nil {
+				return err
+			}
+			p.cdcState.Streams.Insert(stream.ID())
+			return nil
+		})
+	}
 	if p.cdcState.State.LSN != "" {
 		stateLSN, err := pglogrepl.ParseLSN(p.cdcState.State.LSN)
 		if err != nil {
 			return fmt.Errorf("failed to parse State LSN: %s", err)
 		}
-
 		// difference in confirmed flush lsn from State and DB
 		if stateLSN.String() != socket.RestartLSN.String() {
-			return utils.Concurrent(cdcCtx, streams, len(streams), func(ctx context.Context, stream protocol.Stream, _ int) error {
-				defer p.cdcState.Streams.Insert(stream.ID())
-				return p.backfill(pool, stream)
-			})
+			if err := fullLoad(); err != nil {
+				return err
+			}
 		}
 	} else {
 		// save current lsn
 		p.cdcState.State.LSN = socket.RestartLSN.String()
-		// TODO: Save Global state
+		if err := fullLoad(); err != nil {
+			return err
+		}
 	}
 
 	insertionMap := make(map[protocol.Stream]*protocol.ThreadEvent)
@@ -94,7 +101,7 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 	}
 
 	defer func() {
-		if err != nil {
+		if err == nil {
 			for stream, insertThread := range insertionMap {
 				insertThread.Close()
 				err = <-errorChannelMap[stream]
@@ -106,28 +113,30 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 				// }
 			}
 		}
+
 	}()
 
-	return socket.StreamMessages(cdcCtx, func(message waljs.WalJSChange) (bool, error) {
+	return socket.StreamMessages(cdcCtx, func(message waljs.WalJSChange) error {
+		var deleteTimeStamp int64
 		if message.Kind == "delete" {
-			message.Data[jdbc.CDCDeletedAt] = message.Timestamp
+			deleteTimeStamp = message.Timestamp.UnixMilli()
 		}
 		if message.LSN != nil {
-			message.Data[jdbc.CDCLSN] = message.LSN
+			message.Data[constants.CDCLSN] = message.LSN
 		}
-		message.Data[jdbc.CDCUpdatedAt] = message.Timestamp
+		message.Data[constants.CDCUpdatedAt] = message.Timestamp
 
 		// get olake_key_id
 		olakeID := utils.GetKeysHash(message.Data, message.Stream.GetStream().SourceDefinedPrimaryKey.Array()...)
 
 		// insert record
-		rawRecord := types.CreateRawRecord(olakeID, message.Data, message.Timestamp.UnixMilli())
+		rawRecord := types.CreateRawRecord(olakeID, message.Data, deleteTimeStamp)
 		err := insertionMap[message.Stream].Insert(rawRecord)
 		if err != nil {
-			return false, err
+			return err
 		}
 
-		return false, nil
+		return nil
 	})
 }
 

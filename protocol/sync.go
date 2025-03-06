@@ -135,6 +135,11 @@ var syncCmd = &cobra.Command{
 					return fmt.Errorf("%s does not implement ChangeStreamDriver", connector.Type())
 				}
 
+				// Setup Global State from Connector
+				if err := driver.SetupGlobalState(state); err != nil {
+					return err
+				}
+
 				logger.Info("Starting ChangeStream process in driver")
 
 				err := driver.RunChangeStream(pool, cdcStreams...)

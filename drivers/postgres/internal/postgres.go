@@ -8,7 +8,6 @@ import (
 
 	"github.com/datazip-inc/olake/drivers/base"
 	"github.com/datazip-inc/olake/logger"
-	"github.com/datazip-inc/olake/pkg/jdbc"
 	"github.com/datazip-inc/olake/pkg/waljs"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
@@ -229,7 +228,7 @@ func (p *Postgres) populateStream(table Table) (*types.Stream, error) {
 
 	// cdc additional fields
 	if p.Driver.CDCSupport {
-		for column, typ := range jdbc.CDCColumns {
+		for column, typ := range base.CDCColumns {
 			stream.UpsertField(column, typ, true)
 		}
 	}

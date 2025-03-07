@@ -11,7 +11,6 @@ import (
 	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
-	"github.com/datazip-inc/olake/typeutils"
 	"github.com/datazip-inc/olake/utils"
 
 	// MySQL driver
@@ -155,7 +154,6 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 		return nil, fmt.Errorf("invalid stream name format: %s", streamName)
 	}
 	schemaName, tableName := parts[0], parts[1]
-
 	// Initialize stream
 	stream := types.NewStream(tableName, schemaName).WithSyncMode(types.FULLREFRESH, types.CDC)
 
@@ -163,6 +161,7 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	query := `
 		SELECT 
 			COLUMN_NAME, 
+			COLUMN_TYPE,
 			DATA_TYPE, 
 			IS_NULLABLE,
 			COLUMN_KEY
@@ -170,6 +169,8 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 			INFORMATION_SCHEMA.COLUMNS 
 		WHERE 
 			TABLE_SCHEMA = ? AND TABLE_NAME = ?
+		ORDER BY 
+			ORDINAL_POSITION
 	`
 
 	rows, err := m.db.QueryContext(ctx, query, schemaName, tableName)
@@ -178,62 +179,52 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	}
 	defer rows.Close()
 
-	var sampleData map[string]interface{}
-	var rowCount int
-
-	// Prepare a sample query to get some data
-	sampleQuery := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT 1", schemaName, tableName)
-	sampleRows, err := m.db.QueryContext(ctx, sampleQuery)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sample data: %w", err)
-	}
-	defer sampleRows.Close()
-
-	columns, err := sampleRows.Columns()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
-	}
-
-	for sampleRows.Next() {
-		// Create a slice of interface{} to hold column values
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range columns {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := sampleRows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		// Convert to a map
-		rowData := make(map[string]interface{})
-		for i, col := range columns {
-			rowData[col] = values[i]
-		}
-
-		if rowCount == 0 {
-			sampleData = rowData
-		}
-		rowCount++
-	}
 	// Process column information
 	for rows.Next() {
-		var columnName, dataType, isNullable, columnKey string
-		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnKey); err != nil {
+		var columnName, dataType, isNullable, columnType, columnKey string
+		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnType, &columnKey); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %w", err)
 		}
+		// Map MySQL data type to internal data type
+		datatype := types.Unknown
+		// Handle TinyInt(1) special case for boolean
+		key := strings.ToLower(strings.Split(dataType, " ")[0])
+		if key == "tinyint" && strings.ToLower(columnType) == "tinyint(1)" {
+			datatype = types.Bool
+		} else if val, found := mysqlTypeToDataTypes[key]; found {
+			datatype = val
+		} else {
+			logger.Warnf("failed to map MySQL type '%s' for column '%s', defaulting to String", dataType, columnName)
+			datatype = types.String
+		}
+		// Add field to stream with nullable info
+		stream.UpsertField(columnName, datatype, strings.EqualFold("yes", isNullable))
 
-		// Determine if column is a primary key
+		// Check if column is a primary key
 		if columnKey == "PRI" {
 			stream.WithPrimaryKey(columnName)
 		}
+	}
 
-		// Use sample data to resolve type information
-		sampleValue := sampleData[columnName]
-		if err := typeutils.Resolve(stream, map[string]interface{}{columnName: sampleValue}); err != nil {
-			return nil, fmt.Errorf("failed to resolve type for column %s: %w", columnName, err)
+	// Add CDC metadata fields if CDC is supported
+	if m.Driver.CDCSupport {
+		for column, typ := range base.DefaultColumns {
+			stream.UpsertField(column, typ, true)
 		}
+	}
+
+	// Setup supported sync modes
+	stream.SupportedSyncModes.Insert("full_refresh")
+
+	// If we have primary keys or CDC support, enable other sync modes
+	if stream.SourceDefinedPrimaryKey.Len() > 0 {
+		stream.WithSyncMode(types.INCREMENTAL)
+		stream.SupportedSyncModes.Insert("incremental")
+	}
+
+	if m.Driver.CDCSupport {
+		stream.WithSyncMode(types.CDC)
+		stream.SupportedSyncModes.Insert("cdc")
 	}
 
 	return stream, nil

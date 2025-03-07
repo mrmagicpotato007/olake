@@ -3,6 +3,7 @@ package base
 import (
 	"sync"
 
+	"github.com/datazip-inc/olake/constants"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/typeutils"
@@ -11,6 +12,12 @@ import (
 type Driver struct {
 	cachedStreams sync.Map // locally cached streams; It contains all streams
 	CDCSupport    bool     // Used in CDC mode
+}
+
+var DefaultColumns = map[string]types.DataType{
+	constants.CDCDeletedAt:   types.Timestamp,
+	constants.OlakeID:        types.String,
+	constants.OlakeTimestamp: types.Int64,
 }
 
 func (d *Driver) ChangeStreamSupported() bool {

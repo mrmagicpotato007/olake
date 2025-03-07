@@ -77,8 +77,10 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 		}
 		defer func() {
 			insert.Close()
-			// wait for chunk completion
-			err = <-waitChannel
+			if err == nil {
+				// wait for chunk completion
+				err = <-waitChannel
+			}
 		}()
 
 		opts := options.Aggregate().SetAllowDiskUse(true).SetBatchSize(int32(math.Pow10(6)))

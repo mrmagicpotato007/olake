@@ -30,7 +30,7 @@ func (p *Postgres) prepareWALJSConfig(streams ...protocol.Stream) (*waljs.Config
 }
 
 func (p *Postgres) StateType() types.StateType {
-	return types.MixedType
+	return types.GlobalType
 }
 
 // func (p *Postgres) GlobalState() any {

@@ -52,12 +52,18 @@ func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) e
 		setter := jdbc.NewReader(context.TODO(), stmt, p.config.BatchSize, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 			return tx.Query(query, args...)
 		})
-
-		insert, err := pool.NewThread(backfillCtx, stream)
+		waitChannel := make(chan error, 1)
+		insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
 		if err != nil {
 			return err
 		}
-		defer insert.Close()
+		defer func() {
+			insert.Close()
+			if err != nil {
+				// wait for chunk completion
+				err = <-waitChannel
+			}
+		}()
 		err = setter.Capture(func(rows *sql.Rows) error {
 			// Create a map to hold column names and values
 			record := make(types.Record)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/datazip-inc/olake/logger"
+	"github.com/datazip-inc/olake/pkg/jdbc"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
@@ -265,7 +266,7 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
 	var pos mysql.Position
 
-	rows, err := m.db.Query("SHOW MASTER STATUS")
+	rows, err := m.db.Query(jdbc.MySQLMasterStatusQuery())
 	if err != nil {
 		return pos, fmt.Errorf("failed to get master status: %w", err)
 	}
@@ -280,11 +281,9 @@ func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
 	var binlogDoDB, binlogIgnoreDB string
 	var executeGtidSet string
 
-	// Try to scan with or without the GTID column
 	err = rows.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB, &executeGtidSet)
 	if err != nil {
-		// Try without GTID set
-		rows, err = m.db.Query("SHOW MASTER STATUS")
+		rows, err = m.db.Query(jdbc.MySQLMasterStatusQuery())
 		if err != nil {
 			return pos, fmt.Errorf("failed to retry master status: %w", err)
 		}
@@ -308,8 +307,7 @@ func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
 
 // convertRowToMap converts a binary row to a map using the stream schema
 func (m *MySQL) convertRowToMap(stream protocol.Stream, row []interface{}, operation string) map[string]interface{} {
-	// Get table columns
-	query := "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION"
+	query := jdbc.MySQLTableColumnsQuery()
 	rows, err := m.db.Query(query, stream.Namespace(), stream.Name())
 	if err != nil {
 		logger.Errorf("Failed to get columns for table %s.%s: %v", stream.Namespace(), stream.Name(), err)
@@ -340,7 +338,6 @@ func (m *MySQL) convertRowToMap(stream protocol.Stream, row []interface{}, opera
 		}
 	}
 
-	// Add operation type field (similar to MongoDB's cdc_type)
 	record["cdc_type"] = operation
 
 	return record

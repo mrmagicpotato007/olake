@@ -269,15 +269,11 @@ We ❤️ contributions big or small. Please read [CONTRIBUTING.md](CONTRIBUTING
 
 Not sure how to get started? Just ping us on `#contributing-to-olake` in our [slack community](https://olake.io/slack)
 
-<br /><br />
-
+<br />
 ## Documentation
-
 You can find docs at https://olake.io/docs. If you need any clarification or find something missing, feel free to raise a GitHub issue with the label `documentation` at [olake-docs](https://github.com/datazip-inc/olake-docs/) repo or reach out to us at the community slack channel.
 
-<br /><br />
-
-
+<br />
 ## Community
 
 Join the [slack community](https://olake.io/slack) to know more about OLake, future roadmaps and community meetups, about Data Lakes and Lakehouses, the Data Engineering Ecosystem and to connect with other users and contributors.

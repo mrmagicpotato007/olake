@@ -25,16 +25,23 @@ func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) e
 		return fmt.Errorf("failed to get approx row count: %s", err)
 	}
 	pool.AddRecordsToSync(approxRowCount)
-	// check for data distribution
-	splitChunks, err := p.splitTableIntoChunks(stream, approxRowCount)
-	if err != nil {
-		return fmt.Errorf("failed to start backfill: %s", err)
+
+	stateChunks := p.State.GetChunks(stream.Self())
+	var splitChunks []types.Chunk
+	if stateChunks == nil {
+		// check for data distribution
+		splitChunks, err = p.splitTableIntoChunks(stream, approxRowCount)
+		if err != nil {
+			return fmt.Errorf("failed to start backfill: %s", err)
+		}
+		p.State.SetChunks(stream.Self(), types.NewSet(splitChunks...))
+	} else {
+		splitChunks = stateChunks.Array()
 	}
 	sort.Slice(splitChunks, func(i, j int) bool {
 		return utils.CompareInterfaceValue(splitChunks[i].Min, splitChunks[j].Min) < 0
 	})
 
-	stream.SetStateChunks(types.NewSet(splitChunks...))
 	logger.Infof("Starting backfill for stream[%s] with %d chunks", stream.GetStream().Name, len(splitChunks))
 	processChunk := func(ctx context.Context, chunk types.Chunk, number int) error {
 		tx, err := p.client.BeginTx(backfillCtx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
@@ -42,16 +49,14 @@ func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) e
 			return err
 		}
 		defer tx.Rollback()
-		batchStartTime := time.Now()
 		splitColumn := stream.Self().StreamMetadata.SplitColumn
-		if splitColumn == "" {
-			splitColumn = "ctid"
-		}
+		splitColumn = utils.Ternary(splitColumn == "", "ctid", splitColumn).(string)
 		stmt := jdbc.BuildSplitScanQuery(stream, splitColumn, chunk)
 
-		setter := jdbc.NewReader(context.TODO(), stmt, p.config.BatchSize, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+		setter := jdbc.NewReader(backfillCtx, stmt, p.config.BatchSize, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 			return tx.Query(query, args...)
 		})
+		batchStartTime := time.Now()
 		waitChannel := make(chan error, 1)
 		insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
 		if err != nil {
@@ -59,12 +64,17 @@ func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) e
 		}
 		defer func() {
 			insert.Close()
-			if err != nil {
+			if err == nil {
 				// wait for chunk completion
 				err = <-waitChannel
 			}
+			// no error in writer as well
+			if err == nil {
+				logger.Infof("chunk[%d] with min[%v]-max[%v] completed in %0.2f seconds", number, chunk.Min, chunk.Max, time.Since(batchStartTime).Seconds())
+				p.State.RemoveChunk(stream.Self(), chunk)
+			}
 		}()
-		err = setter.Capture(func(rows *sql.Rows) error {
+		return setter.Capture(func(rows *sql.Rows) error {
 			// Create a map to hold column names and values
 			record := make(types.Record)
 
@@ -84,12 +94,6 @@ func (p *Postgres) backfill(pool *protocol.WriterPool, stream protocol.Stream) e
 
 			return nil
 		})
-		if err != nil {
-			return err
-		}
-		logger.Infof("chunk[%v-%v] number %d completed in %s", chunk.Min, chunk.Max, number, time.Since(batchStartTime))
-		stream.RemoveStateChunk(chunk)
-		return nil
 	}
 	return utils.Concurrent(backfillCtx, splitChunks, p.config.MaxThreads, processChunk)
 }
@@ -100,7 +104,7 @@ func (p *Postgres) splitTableIntoChunks(stream protocol.Stream, approxRowCount i
 		relPagesQuery := jdbc.PostgresRelPageCount(stream)
 		err := p.client.QueryRow(relPagesQuery).Scan(&relPages)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get relPages: %v", err)
+			return nil, fmt.Errorf("failed to get relPages: %s", err)
 		}
 		var chunks []types.Chunk
 		batchSize := uint32(1000)
@@ -148,6 +152,10 @@ func (p *Postgres) splitTableIntoChunks(stream protocol.Stream, approxRowCount i
 		var splits []types.Chunk
 		var chunkStart interface{}
 		for chunkEnd != nil {
+			if chunkStart == chunkEnd {
+				// no more chunk creation
+				break
+			}
 			splits = append(splits, types.Chunk{Min: chunkStart, Max: chunkEnd})
 			if count%10 == 0 {
 				time.Sleep(1000 * time.Millisecond)
@@ -167,9 +175,10 @@ func (p *Postgres) splitTableIntoChunks(stream protocol.Stream, approxRowCount i
 	if splitColumn != "" {
 		var minValue, maxValue interface{}
 		minMaxRowCountQuery := jdbc.PostgresMinMaxQuery(stream, splitColumn)
+		// TODO: Fails on UUID type (Good First Issue)
 		err := p.client.QueryRow(minMaxRowCountQuery).Scan(&minValue, &maxValue)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch table stats: %v", err)
+			return nil, fmt.Errorf("failed to fetch table min max: %s", err)
 		}
 		if minValue == maxValue {
 			return []types.Chunk{{Min: minValue, Max: maxValue}}, nil
@@ -193,6 +202,7 @@ func (p *Postgres) splitTableIntoChunks(stream protocol.Stream, approxRowCount i
 			if dynamicChunkSize < 1 {
 				dynamicChunkSize = 1
 			}
+			logger.Debug("running split chunls ")
 			return splitEvenlySizedChunks(minValue, maxValue, approxRowCount, p.config.BatchSize, dynamicChunkSize)
 		}
 		return splitUnevenlySizedChunks(stream, splitColumn, minValue, maxValue)

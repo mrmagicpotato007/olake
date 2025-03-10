@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"time"
+
 	"github.com/datazip-inc/olake/logger"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jmoiron/sqlx"
-	"time"
 )
 
 const (
@@ -24,7 +25,7 @@ var pluginArguments = []string{
 
 type Socket struct {
 	pgConn          *pgconn.PgConn
-	clientXLogPos   pglogrepl.LSN
+	ClientXLogPos   pglogrepl.LSN
 	idleStartTime   time.Time
 	changeFilter    ChangeFilter
 	RestartLSN      pglogrepl.LSN
@@ -41,23 +42,23 @@ func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
 
 	cfg, err := pgconn.ParseConfig(connURL.String())
 	if err != nil {
-		return nil, fmt.Errorf("connection config error: %w", err)
+		return nil, fmt.Errorf("failed to parse connection url: %s", err)
 	}
 
 	if config.TLSConfig != nil {
-		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+		cfg.TLSConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
 
 	// Establish PostgreSQL connection
 	pgConn, err := pgconn.ConnectConfig(context.Background(), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("postgres connection failed: %w", err)
+		return nil, fmt.Errorf("failed to create postgres connection: %s", err)
 	}
 
 	// System identification
 	sysident, err := pglogrepl.IdentifySystem(context.Background(), pgConn)
 	if err != nil {
-		return nil, fmt.Errorf("system identification failed: %w", err)
+		return nil, fmt.Errorf("failed to indentify system: %s", err)
 	}
 	logger.Infof("SystemID:%s Timeline:%d XLogPos:%s Database:%s",
 		sysident.SystemID, sysident.Timeline, sysident.XLogPos, sysident.DBName)
@@ -65,7 +66,7 @@ func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
 	// Get replication slot position
 	var slot ReplicationSlot
 	if err := db.Get(&slot, fmt.Sprintf(ReplicationSlotTempl, config.ReplicationSlotName)); err != nil {
-		return nil, fmt.Errorf("replication slot error: %w", err)
+		return nil, fmt.Errorf("failed to get replication slot: %s", err)
 	}
 
 	// Create and return final connection object
@@ -73,7 +74,7 @@ func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
 		pgConn:          pgConn,
 		changeFilter:    NewChangeFilter(config.Tables.Array()...),
 		RestartLSN:      slot.LSN,
-		clientXLogPos:   slot.LSN,
+		ClientXLogPos:   slot.LSN,
 		replicationSlot: config.ReplicationSlotName,
 		initialWaitTime: config.InitialWaitTime,
 	}, nil
@@ -82,15 +83,15 @@ func NewConnection(db *sqlx.DB, config *Config) (*Socket, error) {
 // Confirm that Logs has been recorded
 func (s *Socket) AcknowledgeLSN() error {
 	err := pglogrepl.SendStandbyStatusUpdate(context.Background(), s.pgConn, pglogrepl.StandbyStatusUpdate{
-		WALWritePosition: s.clientXLogPos,
-		WALFlushPosition: s.clientXLogPos,
+		WALWritePosition: s.ClientXLogPos,
+		WALFlushPosition: s.ClientXLogPos,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to send standby status message: %s", err)
 	}
 
 	// Update local pointer and state
-	logger.Debugf("sent standby status message at LSN#%s", s.clientXLogPos.String())
+	logger.Debugf("sent standby status message at LSN#%s", s.ClientXLogPos.String())
 	return nil
 }
 
@@ -121,7 +122,7 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 			msg, err := s.pgConn.ReceiveMessage(ctx)
 			// If the receive timed out, log the idle state and continue waiting.
 			if err != nil {
-				return fmt.Errorf("failed to receive message: %w", err)
+				return fmt.Errorf("failed to receive message from wal: %s", err)
 			}
 
 			// Process only CopyData messages.
@@ -135,7 +136,7 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 				// For keepalive messages, process them (but no ack is sent here).
 				_, err := pglogrepl.ParsePrimaryKeepaliveMessage(copyData.Data[1:])
 				if err != nil {
-					return fmt.Errorf("failed to parse primary keepalive message: %w", err)
+					return fmt.Errorf("failed to parse primary keepalive message: %s", err)
 				}
 
 			case pglogrepl.XLogDataByteID:
@@ -143,25 +144,25 @@ func (s *Socket) StreamMessages(ctx context.Context, callback OnMessage) error {
 				s.idleStartTime = time.Now()
 				xld, err := pglogrepl.ParseXLogData(copyData.Data[1:])
 				if err != nil {
-					return fmt.Errorf("failed to parse XLogData: %w", err)
+					return fmt.Errorf("failed to parse XLogData: %s", err)
 				}
 				// Calculate new LSN based on the received WAL data.
 				newLSN := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 				// Process change with the provided callback.
 				if err := s.changeFilter.FilterChange(newLSN, xld.WALData, callback); err != nil {
-					return fmt.Errorf("failed to filter change: %w", err)
+					return fmt.Errorf("failed to filter change: %s", err)
 				}
 				// Update the current LSN pointer.
-				s.clientXLogPos = newLSN
+				s.ClientXLogPos = newLSN
 
 			default:
-				logger.Debugf("Received unhandled message type: %v", copyData.Data[0])
+				logger.Debugf("received unhandled message type: %v", copyData.Data[0])
 			}
 		}
 	}
 }
 
 // cleanUpOnFailure drops replication slot and publication if database snapshotting was failed for any reason
-func (s *Socket) Cleanup() {
-	s.pgConn.Close(context.TODO())
+func (s *Socket) Cleanup(ctx context.Context) {
+	_ = s.pgConn.Close(ctx)
 }

@@ -1,0 +1,24 @@
+name: Prevent Direct Master PRs
+
+on:
+  pull_request:
+    branches:
+      - 'master'
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-source-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR source branch
+        run: |
+          # Get PR source branch
+          SOURCE_BRANCH="${{ github.head_ref }}"
+          
+          # Check if source branch is 'staging'
+          if [ "$SOURCE_BRANCH" != "staging" ]; then
+            echo "::error::PRs to master branch are only allowed from staging branch. Your source branch is '$SOURCE_BRANCH'."
+            exit 1
+          else
+            echo "PR from staging to master is allowed ✅"
+          fi 

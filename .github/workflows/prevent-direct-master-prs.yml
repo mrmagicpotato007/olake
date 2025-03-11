@@ -30,3 +30,4 @@ jobs:
           else
             echo "✅ PR from staging to master is allowed"
           fi
+          

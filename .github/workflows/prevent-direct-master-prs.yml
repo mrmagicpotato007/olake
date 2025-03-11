@@ -1,4 +1,4 @@
-name: Prevent Direct Master PRs
+name: Direct Master PRs not allowed (Use Staging as base branch)
 
 on:
   pull_request:

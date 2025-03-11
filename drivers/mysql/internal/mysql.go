@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/datazip-inc/olake/drivers/base"
@@ -25,8 +26,10 @@ const (
 // MySQL represents the MySQL database driver
 type MySQL struct {
 	*base.Driver
-	config *Config
-	db     *sql.DB
+	config     *Config
+	db         *sql.DB
+	metadata   map[string]*MySQLTableMetadata
+	metadataMu sync.RWMutex
 }
 
 // GetConfigRef returns a reference to the configuration

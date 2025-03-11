@@ -1,7 +1,7 @@
 name: Direct Master PRs not allowed (Use Staging as base branch)
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - 'master'
     types: [opened, synchronize, reopened]
@@ -12,6 +12,15 @@ jobs:
     steps:
       - name: Check PR source branch
         run: |
+          # Get PR target branch from context
+          TARGET_BRANCH="${{ github.base_ref }}"
+          
+          # Only run this check for PRs targeting master
+          if [ "$TARGET_BRANCH" != "master" ]; then
+            echo "This workflow should only run for PRs targeting master. Exiting."
+            exit 0
+          fi
+          
           # Get PR source branch
           SOURCE_BRANCH="${{ github.head_ref }}"
           

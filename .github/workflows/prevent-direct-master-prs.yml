@@ -1,4 +1,4 @@
-name: Direct Master PRs not allowed (Use Staging as base branch)
+name: Master Branch Protection
 
 on:
   pull_request:
@@ -7,21 +7,19 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  check-source-branch:
+  enforce-master-branch-rules:
     runs-on: ubuntu-latest
     steps:
-      - name: Check PR source branch
+      - name: Check source branch
         run: |
-          echo "Target branch: ${{ github.base_ref }}"
-          echo "Source branch: ${{ github.head_ref }}"
-          
-          # Get PR source branch
           SOURCE_BRANCH="${{ github.head_ref }}"
           
-          # Check if source branch is 'staging'
+          echo "PR: $SOURCE_BRANCH → master"
+          
+          # Only allow staging to master PRs
           if [ "$SOURCE_BRANCH" != "staging" ]; then
-            echo "::error::Only staging (as base branch) PRs are allowed. Direct master merge is prohibited."
+            echo "::error::Only PRs from staging to master are allowed. Direct master merge is prohibited."
             exit 1
           else
-            echo "PR from staging to master is allowed ✅"
+            echo "✅ PR from staging to master is allowed"
           fi

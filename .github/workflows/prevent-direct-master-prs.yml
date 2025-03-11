@@ -3,7 +3,7 @@ name: Master Branch Protection
 on:
   pull_request:
     branches:
-      - 'master'
+      - 'master'  # This workflow will ONLY run on PRs targeting the master branch
     types: [opened, synchronize, reopened]
 
 jobs:
@@ -13,8 +13,15 @@ jobs:
       - name: Check source branch
         run: |
           SOURCE_BRANCH="${{ github.head_ref }}"
+          TARGET_BRANCH="${{ github.base_ref }}"
           
-          echo "PR: $SOURCE_BRANCH → master"
+          echo "PR: $SOURCE_BRANCH → $TARGET_BRANCH"
+          
+          # Double-check that we're targeting master
+          if [ "$TARGET_BRANCH" != "master" ]; then
+            echo "This workflow should only run on PRs to master. Something is wrong with the configuration."
+            exit 0
+          fi
           
           # Only allow staging to master PRs
           if [ "$SOURCE_BRANCH" != "staging" ]; then

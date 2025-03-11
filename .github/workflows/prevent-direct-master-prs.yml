@@ -17,8 +17,8 @@ jobs:
           
           # Check if source branch is 'staging'
           if [ "$SOURCE_BRANCH" != "staging" ]; then
-            echo "::error::PRs to master branch are only allowed from staging branch. Your source branch is '$SOURCE_BRANCH'."
+            echo "::error::Only staging (as base branch) PRs are allowed. Direct master merge is prohibited."
             exit 1
           else
             echo "PR from staging to master is allowed ✅"
-          fi 
+          fi

@@ -87,6 +87,7 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		return err
 	}
 	defer insert.Close()
+
 	// Iterates over the cursor to print the change stream events
 	for cursor.TryNext(cdcCtx) {
 		var record CDCDocument

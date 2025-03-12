@@ -226,7 +226,7 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 				}
 
 				for _, row := range rowsToProcess {
-					record := m.convertRowToMap(stream, row, operationType)
+					record := m.convertRowToMap(stream, row, e.Table.ColumnNameString(), operationType)
 					if record == nil {
 						continue
 					}
@@ -305,24 +305,27 @@ func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
 	return pos, nil
 }
 
-// convertRowToMap converts a binary row to a map using the stream schema
-func (m *MySQL) convertRowToMap(stream protocol.Stream, row []interface{}, operation string) map[string]interface{} {
-	query := jdbc.MySQLTableColumnsQuery()
-	rows, err := m.db.Query(query, stream.Namespace(), stream.Name())
-	if err != nil {
-		logger.Errorf("Failed to get columns for table %s.%s: %v", stream.Namespace(), stream.Name(), err)
-		return nil
-	}
-	defer rows.Close()
-
-	var columns []string
-	for rows.Next() {
-		var colName string
-		if err := rows.Scan(&colName); err != nil {
-			logger.Errorf("Failed to scan column name: %v", err)
-			continue
+// Updated convertRowToMap function
+func (m *MySQL) convertRowToMap(stream protocol.Stream, row []interface{}, columns []string, operation string) map[string]interface{} {
+	// If no column names available from binlog, fall back to database query
+	if len(columns) == 0 || columns[0] == "" {
+		query := jdbc.MySQLTableColumnsQuery()
+		rows, err := m.db.Query(query, stream.Namespace(), stream.Name())
+		if err != nil {
+			logger.Errorf("Failed to get columns for table %s.%s: %v", stream.Namespace(), stream.Name(), err)
+			return nil
 		}
-		columns = append(columns, colName)
+		defer rows.Close()
+
+		columns = []string{}
+		for rows.Next() {
+			var colName string
+			if err := rows.Scan(&colName); err != nil {
+				logger.Errorf("Failed to scan column name: %v", err)
+				continue
+			}
+			columns = append(columns, colName)
+		}
 	}
 
 	if len(columns) != len(row) {

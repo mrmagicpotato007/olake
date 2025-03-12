@@ -3,9 +3,14 @@ module github.com/datazip-inc/olake/drivers/mysql
 go 1.22
 
 require (
-	github.com/datazip-inc/olake v0.0.0-20250128110354-c588ead6f5c9
+	github.com/datazip-inc/olake v0.0.0-20250312070222-ed705d25bc0c
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/jackc/pgx/v4 v4.15.0
+)
+
+require (
+	github.com/rs/zerolog v1.15.0 // indirect
+	go.mongodb.org/mongo-driver v1.17.3 // indirect
 )
 
 require (
@@ -31,7 +36,6 @@ require (
 	github.com/brainicorn/ganno v0.0.0-20220304182003-e638228cd865 // indirect
 	github.com/brainicorn/goblex v0.0.0-20210908194630-cfe0cfdf87dd // indirect
 	github.com/felixge/fgprof v0.9.5 // indirect
-	github.com/fraugster/parquet-go v0.12.0 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
 	github.com/go-mysql-org/go-mysql v1.11.0
@@ -39,7 +43,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.22.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/pprof v0.0.0-20240227163752-401108e1b7e7 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -52,7 +55,7 @@ require (
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgproto3/v2 v2.2.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20200714003250-2b9c44734f2b // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgtype v1.10.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
@@ -67,7 +70,6 @@ require (
 	github.com/pelletier/go-toml v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/afero v1.2.2 // indirect
 	github.com/spf13/cast v1.3.0 // indirect
 	github.com/spf13/cobra v1.8.0 // indirect

@@ -108,7 +108,6 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		rawRecord := types.CreateRawRecord(
 			utils.GetKeysHash(record.FullDocument, constants.MongoPrimaryID),
 			record.FullDocument,
-			0,
 			opType,
 			int64(record.ClusterTime.T)*1000,
 		)

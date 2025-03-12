@@ -237,7 +237,9 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 	if err != nil {
 		// If connection fails, clean up the process
 		if i.cmd != nil && i.cmd.Process != nil {
-			i.cmd.Process.Kill()
+			if killErr := i.cmd.Process.Kill(); killErr != nil {
+				logger.Error("Failed to kill process", "error", killErr)
+			}
 		}
 		return fmt.Errorf("failed to connect to iceberg writer: %v", err)
 	}
@@ -262,7 +264,7 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 }
 
 func getTestDebeziumRecord() string {
-	random_id := utils.ULID()
+	randomID := utils.ULID()
 	return `{
 			"destination_table": "olake_test_table",
 			"key": {
@@ -276,7 +278,7 @@ func getTestDebeziumRecord() string {
 						"optional" : false
 					},
 					"payload" : {
-						"_id" : "` + random_id + `"
+						"_id" : "` + randomID + `"
 					}
 				}
 				,
@@ -308,7 +310,7 @@ func getTestDebeziumRecord() string {
 					"name" : "dbz_.incr.incr1"
 				},
 				"payload" : {
-					"_id" : "` + random_id + `",
+					"_id" : "` + randomID + `",
 					"__deleted" : false,
 					"__op" : "r",
 					"__db" : "incr",
@@ -357,7 +359,10 @@ func (i *Iceberg) CloseIcebergClient() error {
 		logger.Info("Shutting down Iceberg server", "port", i.port)
 
 		// Flush any remaining records before shutting down
-		flushBatch(serverKey, server.client)
+		if err := flushBatch(serverKey, server.client); err != nil {
+			logger.Error("Error flushing batch", "error", err)
+			return err
+		}
 
 		if server.conn != nil {
 			server.conn.Close()

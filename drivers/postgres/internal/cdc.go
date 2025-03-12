@@ -127,7 +127,6 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 		return inserters[msg.Stream].Insert(types.CreateRawRecord(
 			utils.GetKeysHash(msg.Data, pkFields...),
 			msg.Data,
-			0,
 			opType,
 			deleteTS,
 		))

@@ -274,7 +274,9 @@ func (p *ProcessOutputReader) StartReading() {
 func (p *ProcessOutputReader) Close() {
 	p.closeOnce.Do(func() {
 		if p.closeFn != nil {
-			p.closeFn()
+			if err := p.closeFn(); err != nil {
+				fmt.Printf("Error closing ProcessOutputReader: %v\n", err)
+			}
 		}
 	})
 }

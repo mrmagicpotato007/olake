@@ -186,7 +186,7 @@ func (r *RawRecord) createDebeziumSchema(db string, stream string, normalization
 	}
 }
 
-func CreateRawRecord(olakeID string, data map[string]any, deleteAt int64, operationType string, cdcTimestamp int64) RawRecord {
+func CreateRawRecord(olakeID string, data map[string]any, operationType string, cdcTimestamp int64) RawRecord {
 	return RawRecord{
 		OlakeID:       olakeID,
 		Data:          data,

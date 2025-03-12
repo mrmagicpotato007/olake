@@ -43,7 +43,7 @@ func (i *Iceberg) Setup(stream protocol.Stream, options *protocol.Options) error
 	return i.SetupIcebergClient(!stream.Self().BackfillInProcess)
 }
 
-func (i *Iceberg) Write(ctx context.Context, record types.RawRecord) error {
+func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 	// Convert record to Debezium format
 	debeziumRecord, err := record.GetDebeziumJSON(i.config.Database, i.stream.Name(), i.config.Normalization)
 	if err != nil {
@@ -125,7 +125,10 @@ func (i *Iceberg) Check() error {
 	res, err := i.client.SendStringArray(ctx, req)
 	if err != nil {
 		// Clean up before returning error
-		i.CloseIcebergClient()
+		if err := i.CloseIcebergClient(); err != nil {
+			log.Printf("Error closing Iceberg client: %v", err)
+			return err
+		}
 		i.stream = originalStream
 		return fmt.Errorf("error sending record to Iceberg RPC Server: %v", err)
 	}
@@ -133,7 +136,10 @@ func (i *Iceberg) Check() error {
 	log.Printf("Server Response: %s", res.GetResult())
 
 	// Always clean up after Check()
-	i.CloseIcebergClient()
+	if err := i.CloseIcebergClient(); err != nil {
+		log.Printf("Error closing Iceberg client after check: %v", err)
+		return err
+	}
 
 	// Restore original stream
 	i.stream = originalStream
@@ -162,7 +168,7 @@ func (i *Iceberg) Normalization() bool {
 	return i.config.Normalization
 }
 
-func (i *Iceberg) EvolveSchema(addNulls bool, addDefaults bool, properties map[string]*types.Property, record types.Record) error {
+func (i *Iceberg) EvolveSchema(_ bool, _ bool, _ map[string]*types.Property, _ types.Record) error {
 	// Schema evolution is handled by Iceberg
 	return nil
 }

@@ -61,6 +61,23 @@ func (c *Config) URI() string {
 
 // Validate checks the configuration for any missing or invalid fields
 func (c *Config) Validate() error {
+	// Validate hosts
+	if len(c.Hosts) == 0 {
+		return fmt.Errorf("at least one host is required")
+	}
+	for _, host := range c.Hosts {
+		if host == "" {
+			return fmt.Errorf("empty host name")
+		} else if strings.Contains(host, "https") || strings.Contains(host, "http") {
+			return fmt.Errorf("host should not contain http or https: %s", host)
+		}
+	}
+
+	// Validate port
+	if c.Port <= 0 || c.Port > 65535 {
+		return fmt.Errorf("invalid port number: must be between 1 and 65535")
+	}
+
 	// Validate required fields
 	if c.Username == "" {
 		return fmt.Errorf("username is required")
@@ -72,6 +89,16 @@ func (c *Config) Validate() error {
 	// Optional database name, default to 'mysql'
 	if c.Database == "" {
 		c.Database = "mysql"
+	}
+
+	// Set default number of threads if not provided
+	if c.MaxThreads <= 0 {
+		c.MaxThreads = 2 // Aligned with PostgreSQL default
+	}
+
+	// Set default retry count if not provided
+	if c.RetryCount <= 0 {
+		c.RetryCount = 3 // Reasonable default for retries
 	}
 
 	return utils.Validate(c)

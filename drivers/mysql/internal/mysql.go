@@ -47,8 +47,6 @@ func (m *MySQL) Setup() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
-	db.SetConnMaxLifetime(30 * time.Minute)
-
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -65,10 +63,7 @@ func (m *MySQL) Setup() error {
 
 // Check verifies the database connection
 func (m *MySQL) Check() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	return m.db.PingContext(ctx)
+	return m.Setup()
 }
 
 // Type returns the database type

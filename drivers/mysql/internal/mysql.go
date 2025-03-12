@@ -157,29 +157,39 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnType, &columnKey); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %w", err)
 		}
+
+		key := strings.Split(strings.Split(strings.ToLower(dataType), "(")[0], " ")[0]
+		// Further split on space to handle "unsigned int" or similar
 		datatype := types.Unknown
-		key := strings.ToLower(strings.Split(dataType, " ")[0])
-		if key == "tinyint" && strings.ToLower(columnType) == "tinyint(1)" {
+
+		// Special case for tinyint(1) as boolean
+		if key == "tinyint" && strings.Contains(strings.ToLower(columnType), "tinyint(1)") {
 			datatype = types.Bool
 		} else if val, found := mysqlTypeToDataTypes[key]; found {
 			datatype = val
 		} else {
-			logger.Warnf("failed to map MySQL type '%s' for column '%s', defaulting to String", dataType, columnName)
+			logger.Warnf("Unsupported MySQL type '%s' (extracted key: %s) for column '%s.%s', defaulting to String", dataType, key, streamName, columnName)
 			datatype = types.String
 		}
 		stream.UpsertField(columnName, datatype, strings.EqualFold("yes", isNullable))
 
+		// Mark primary keys
 		if columnKey == "PRI" {
 			stream.WithPrimaryKey(columnName)
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+	// Add CDC columns if supported
 	if m.Driver.CDCSupport {
 		for column, typ := range base.DefaultColumns {
 			stream.UpsertField(column, typ, true)
 		}
 	}
 
+	// Set supported sync modes
 	stream.SupportedSyncModes.Insert("full_refresh")
 
 	if stream.SourceDefinedPrimaryKey.Len() > 0 {

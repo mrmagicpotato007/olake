@@ -180,6 +180,10 @@ func (m *MySQL) processChunk(ctx context.Context, pool *protocol.WriterPool, str
 
 					record := make(map[string]interface{})
 					for i, col := range columns {
+						if b, ok := values[i].([]byte); ok {
+							record[col] = string(b)
+							continue
+						}
 						record[col] = values[i]
 					}
 

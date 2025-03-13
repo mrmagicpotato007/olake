@@ -29,6 +29,15 @@ type MySQL struct {
 	db     *sql.DB
 }
 
+func (m *MySQL) StateType() types.StateType {
+	return types.GlobalType
+}
+
+func (m *MySQL) SetupState(state *types.State) {
+	state.Type = m.StateType()
+	m.State = state
+}
+
 // GetConfigRef returns a reference to the configuration
 func (m *MySQL) GetConfigRef() protocol.Config {
 	m.config = &Config{}
@@ -120,7 +129,7 @@ func (m *MySQL) Discover(discoverSchema bool) ([]*types.Stream, error) {
 func (m *MySQL) Read(pool *protocol.WriterPool, stream protocol.Stream) error {
 	switch stream.GetSyncMode() {
 	case types.FULLREFRESH:
-		return m.backfill(stream, pool)
+		return m.backfill(pool, stream)
 	case types.CDC:
 		return m.changeStreamSync(stream, pool)
 	}
@@ -198,4 +207,12 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 	}
 
 	return stream, nil
+}
+
+// Close ensures proper cleanup
+func (m *MySQL) Close() error {
+	if m.db != nil {
+		return m.db.Close()
+	}
+	return nil
 }

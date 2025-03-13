@@ -39,13 +39,9 @@ func (m *MySQL) SetupGlobalState(state *types.State) error {
 	return nil
 }
 
-// StateType returns the type of state used by the MySQL driver
-func (m *MySQL) StateType() types.StateType {
-	return types.StreamType
-}
-
 // changeStreamSync implements CDC for a specific stream
 func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPool) error {
+	ctx := context.TODO()
 	// Get or initialize binlog position
 	var pos mysql.Position
 	serverID := uint32(1000 + time.Now().UnixNano()%9000) // Default server ID
@@ -53,7 +49,7 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	// Check if we have position in state
 	hasBinlogPosition := false
 	// Check if we have a position in state
-	if posStr := stream.GetStateKey(cdcPositionKey); posStr != nil {
+	if posStr := m.State.GetCursor(stream.Self(), cdcPositionKey); posStr != nil {
 		switch v := posStr.(type) {
 		case float64:
 			pos.Pos = uint32(v)
@@ -66,12 +62,13 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	}
 
 	// Check if we have a file position in state
-	if fileStr, ok := stream.GetStateKey(cdcFileKey).(string); ok {
+	if fileStr, ok := m.State.GetCursor(stream.Self(), cdcFileKey).(string); ok {
+
 		pos.Name = fileStr
 		hasBinlogPosition = true
 	}
 
-	if serverIDStr := stream.GetStateKey(cdcServerIDKey); serverIDStr != nil {
+	if serverIDStr := m.State.GetCursor(stream.Self(), cdcServerIDKey); serverIDStr != nil {
 		switch v := serverIDStr.(type) {
 		case float64:
 			serverID = uint32(v)
@@ -82,10 +79,10 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		}
 	} else {
 		// Save server ID to state
-		stream.SetStateKey(cdcServerIDKey, serverID)
+		m.State.SetCursor(stream.Self(), cdcServerIDKey, serverID)
 	}
 
-	chunks := stream.GetStateChunks()
+	chunks := m.State.GetChunks(stream.Self())
 
 	// If no position or chunks remaining, do backfill first
 	if !hasBinlogPosition || chunks == nil || chunks.Len() != 0 {
@@ -97,11 +94,11 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		}
 
 		// Save position to state
-		stream.SetStateKey(cdcFileKey, pos.Name)
-		stream.SetStateKey(cdcPositionKey, pos.Pos)
+		m.State.SetCursor(stream.Self(), cdcFileKey, pos.Name)
+		m.State.SetCursor(stream.Self(), cdcPositionKey, pos.Pos)
 
 		// Perform backfill
-		if err := m.backfill(stream, pool); err != nil {
+		if err := m.backfill(pool, stream); err != nil {
 			return fmt.Errorf("failed to backfill stream %s: %w", stream.ID(), err)
 		}
 
@@ -132,7 +129,8 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		return fmt.Errorf("failed to start binlog sync: %w", err)
 	}
 
-	insert, err := pool.NewThread(context.TODO(), stream)
+	waitChannel := make(chan error, 1)
+	insert, err := pool.NewThread(ctx, stream, protocol.WithErrorChannel(waitChannel))
 	if err != nil {
 		return err
 	}
@@ -233,28 +231,23 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 
 					pkColumn := getPrimaryKeyColumn(m.db, tableName)
 					recordHash := utils.GetKeysHash(record, pkColumn)
-					rawRecord := types.CreateRawRecord(recordHash, record, time.Now().UnixNano())
-					exit, err := insert.Insert(rawRecord)
+					//rawRecord := types.CreateRawRecord(recordHash, record, time.Now().UnixNano())
+					err = insert.Insert(types.CreateRawRecord(recordHash, record, time.Now().UnixNano()))
 					if err != nil {
 						return fmt.Errorf("failed to insert record: %w", err)
-					}
-					if exit {
-						stream.SetStateKey(cdcFileKey, currentPos.Name)
-						stream.SetStateKey(cdcPositionKey, currentPos.Pos)
-						return nil
 					}
 				}
 			}
 		}
 
 		// Save current position after each event
-		stream.SetStateKey(cdcFileKey, currentPos.Name)
-		stream.SetStateKey(cdcPositionKey, currentPos.Pos)
+		m.State.SetCursor(stream.Self(), cdcFileKey, currentPos.Name)
+		m.State.SetCursor(stream.Self(), cdcPositionKey, currentPos.Pos)
 	}
 
 	// Final save of position before returning
-	stream.SetStateKey(cdcFileKey, currentPos.Name)
-	stream.SetStateKey(cdcPositionKey, currentPos.Pos)
+	m.State.SetCursor(stream.Self(), cdcFileKey, currentPos.Name)
+	m.State.SetCursor(stream.Self(), cdcPositionKey, currentPos.Pos)
 
 	logger.Infof("Completed CDC processing for stream[%s] at position %s:%d",
 		stream.ID(), currentPos.Name, currentPos.Pos)
@@ -263,46 +256,27 @@ func (m *MySQL) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 }
 
 // getCurrentBinlogPosition retrieves the current binlog position from MySQL
+// getCurrentBinlogPosition retrieves the current binlog position from MySQL
 func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
-	var pos mysql.Position
-
 	rows, err := m.db.Query(jdbc.MySQLMasterStatusQuery())
 	if err != nil {
-		return pos, fmt.Errorf("failed to get master status: %w", err)
+		return mysql.Position{}, fmt.Errorf("failed to get master status: %w", err)
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		return pos, fmt.Errorf("no binlog position available")
+		return mysql.Position{}, fmt.Errorf("no binlog position available")
 	}
 
 	var file string
 	var position uint32
-	var binlogDoDB, binlogIgnoreDB string
-	var executeGtidSet string
+	var binlogDoDB, binlogIgnoreDB, executeGtidSet string
 
-	err = rows.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB, &executeGtidSet)
-	if err != nil {
-		rows, err = m.db.Query(jdbc.MySQLMasterStatusQuery())
-		if err != nil {
-			return pos, fmt.Errorf("failed to retry master status: %w", err)
-		}
-		defer rows.Close()
-
-		if !rows.Next() {
-			return pos, fmt.Errorf("no binlog position available on retry")
-		}
-
-		err = rows.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB)
-		if err != nil {
-			return pos, fmt.Errorf("failed to scan binlog position: %w", err)
-		}
+	if err := rows.Scan(&file, &position, &binlogDoDB, &binlogIgnoreDB, &executeGtidSet); err != nil {
+		return mysql.Position{}, fmt.Errorf("failed to scan binlog position: %w", err)
 	}
 
-	pos.Name = file
-	pos.Pos = position
-
-	return pos, nil
+	return mysql.Position{Name: file, Pos: position}, nil
 }
 
 // Updated convertRowToMap function
@@ -344,12 +318,4 @@ func (m *MySQL) convertRowToMap(stream protocol.Stream, row []interface{}, colum
 	record["cdc_type"] = operation
 
 	return record
-}
-
-// Close ensures proper cleanup
-func (m *MySQL) Close() error {
-	if m.db != nil {
-		return m.db.Close()
-	}
-	return nil
 }

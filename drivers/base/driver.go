@@ -19,12 +19,6 @@ var DefaultColumns = map[string]types.DataType{
 	constants.OlakeTimestamp: types.Int64,
 }
 
-var DefaultColumns = map[string]types.DataType{
-	constants.CDCDeletedAt:   types.Timestamp,
-	constants.OlakeID:        types.String,
-	constants.OlakeTimestamp: types.Int64,
-}
-
 func (d *Driver) ChangeStreamSupported() bool {
 	return d.CDCSupport
 }

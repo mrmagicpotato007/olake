@@ -49,6 +49,11 @@ func PostgresWalLSNQuery() string {
 	return `SELECT pg_current_wal_lsn()::text::pg_lsn`
 }
 
+// PostgresNextChunkEndQuery generates a SQL query to fetch the maximum value of a specified column
+func PostgresNextChunkEndQuery(stream protocol.Stream, filterColumn string, filterValue interface{}, batchSize int) string {
+	return fmt.Sprintf(`SELECT MAX(%s) FROM (SELECT %s FROM "%s"."%s" WHERE %s > %v ORDER BY %s ASC LIMIT %d) AS T`, filterColumn, filterColumn, stream.Namespace(), stream.Name(), filterColumn, filterValue, filterColumn, batchSize)
+}
+
 // PostgresMinQuery returns the query to fetch the minimum value of a column in PostgreSQL
 func PostgresMinQuery(stream protocol.Stream, filterColumn string, filterValue interface{}) string {
 	return fmt.Sprintf(`SELECT MIN(%s) FROM "%s"."%s" WHERE %s > %v`, filterColumn, stream.Namespace(), stream.Name(), filterColumn, filterValue)

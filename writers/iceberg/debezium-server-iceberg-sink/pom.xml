@@ -34,8 +34,8 @@
         <version.spark.major.iceebrgtemp>3.5</version.spark.major.iceebrgtemp>
         <version.spark.scala>2.13</version.spark.scala>
         <version.spark>${version.spark.major}.0-preview1</version.spark>
-        <version.hadoop>3.3.6</version.hadoop>
-        <version.hive>3.1.3</version.hive>
+        <version.hadoop>3.4.0</version.hadoop>
+        <version.hive>4.0.0</version.hive>
         <version.googlebigdataoss>2.2.20</version.googlebigdataoss>
         <version.testcontainers>1.20.4</version.testcontainers>
         <!-- Updated versions for vulnerable dependencies -->
@@ -43,11 +43,11 @@
         <version.nimbus.jwt>9.37.2</version.nimbus.jwt>
         <version.commons.io>2.14.0</version.commons.io>
         <version.netty>4.1.118.Final</version.netty>
-        <version.quarkus>3.9.2</version.quarkus>
+        <version.quarkus>3.19.1</version.quarkus>
         <version.grpc>1.69.0</version.grpc>
         <version.avro>1.11.4</version.avro>
         <version.derby>10.17.1.0</version.derby>
-        <version.thrift>0.14.0</version.thrift>
+        <version.thrift>0.19.0</version.thrift>
         <version.jettison>1.5.4</version.jettison>
         <version.parsson>1.1.3</version.parsson>
         <version.snappy.java>1.1.10.4</version.snappy.java>

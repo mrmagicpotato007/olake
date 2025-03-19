@@ -45,13 +45,13 @@ func (i *Iceberg) Setup(stream protocol.Stream, options *protocol.Options) error
 
 func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 	// Convert record to Debezium format
-	debeziumRecord, err := record.GetDebeziumJSON(i.config.Database, i.stream.Name(), i.config.Normalization)
+	debeziumRecord, err := record.GetDebeziumJSON(i.config.IcebergDatabase, i.stream.Name(), i.config.Normalization)
 	if err != nil {
 		return fmt.Errorf("failed to convert record: %v", err)
 	}
 
 	// Get the config hash for this writer instance
-	configHash := getConfigHash(i.config, i.stream.ID(), !i.stream.Self().BackfillInProcess)
+	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), !i.stream.Self().BackfillInProcess)
 
 	// Add the record to the batch
 	flushed, err := addToBatch(configHash, debeziumRecord, i.client)
@@ -75,7 +75,7 @@ func (i *Iceberg) Close() error {
 	i.closed = true
 
 	// Get the config hash for this writer instance to flush any remaining records
-	configHash := getConfigHash(i.config, i.stream.ID(), !i.stream.Self().BackfillInProcess)
+	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), !i.stream.Self().BackfillInProcess)
 
 	// Flush any remaining records before closing
 	if i.client != nil {

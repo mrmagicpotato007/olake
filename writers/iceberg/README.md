@@ -27,6 +27,56 @@ Its based in the directory debezium-server-iceberg-sink. Read more ./debezium-se
 
 ## How to run 
 
+### Local Minio + JDBC (Local test setup):
+
+Make sure you have docker installed before you run this
+
+```shell
+cd writers/iceberg/local-test
+docker compose up
+```
+This will create 
+1. postgres --> JDBC catalog
+2. Minio --> For AWS S3 like filesystem setup on your local
+3. Spark --> Querying Iceberg data.
+
+Now create a writer.json for iceberg writer as follows : 
+```json
+{
+  "type": "ICEBERG",
+  "writer": {
+    "catalog_type": "jdbc",
+    "jdbc_url": "jdbc:postgresql://localhost:5432/iceberg",
+    "jdbc_username": "iceberg",
+    "jdbc_password": "password",
+    "normalization": false,
+    "iceberg_s3_path": "s3a://warehouse",
+    "s3_endpoint": "http://localhost:9000",
+    "s3_use_ssl": false,
+    "s3_path_style": true,
+    "aws_access_key": "admin",
+    "aws_secret_key": "password",
+    "iceberg_db": "olake_iceberg"
+  }
+}  
+```
+And run the sync normally as mentioned in the getting started doc.
+
+> Now how to see if the data is actually populated?
+Run : 
+```shell
+# Connect to the spark-iceberg container
+docker exec -it spark-iceberg bash
+
+# Start spark-sql (rerun it if error occurs)
+spark-sql
+
+# Query in format select * from catalog_name.iceberg_db_name.table_name
+select * from olake_iceberg.olake_iceberg.table_name;
+```
+
+
+### AWS S3 + Glue
 Create a json for writer config (Works for S3 as storage and AWS Glue as a catalog) : 
 ```json
 {

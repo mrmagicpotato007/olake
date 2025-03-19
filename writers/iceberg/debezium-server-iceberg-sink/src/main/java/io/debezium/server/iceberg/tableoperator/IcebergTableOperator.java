@@ -244,7 +244,7 @@ public class IcebergTableOperator {
       
     } catch (org.apache.iceberg.exceptions.CommitFailedException e) {
       String errorMessage = e.getMessage();
-      LOGGER.error("Commit failed: {}", errorMessage);
+      LOGGER.error("Commit failed: {}", errorMessage, e);
       
       try {
         writer.abort();
@@ -253,13 +253,15 @@ public class IcebergTableOperator {
       }
       
       throw new RuntimeException("Failed to commit", e);
+    } catch (Exception ex) {
+      LOGGER.error("Failed to write data to table: {}", icebergTable.name(), ex);
       
-    } catch (IOException ex) {
       try {
         writer.abort();
-      } catch (IOException e) {
-        LOGGER.warn("Failed to abort writer", e);
+      } catch (IOException abortEx) {
+        LOGGER.warn("Failed to abort writer", abortEx);
       }
+      
       throw new RuntimeException("Failed to write data to table: " + icebergTable.name(), ex);
     } finally {
       try {

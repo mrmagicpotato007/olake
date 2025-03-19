@@ -15,5 +15,8 @@
         <Logger name="org.apache.iceberg" level="info" additivity="false">
             <AppenderRef ref="Console"/>
         </Logger>
+        <Logger name="io.grpc" level="error" additivity="false">
+            <AppenderRef ref="Console"/>
+        </Logger>
     </Loggers>
 </Configuration> 

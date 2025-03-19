@@ -78,8 +78,13 @@ var (
 )
 
 // getConfigHash generates a unique identifier for server configuration per stream
-func getConfigHash(config *Config, streamID string, upsert bool) string {
-	return fmt.Sprintf("%s-%s-%s-%s-%t", streamID, config.Database, config.S3Path, config.Region, upsert)
+func getConfigHash(namespace string, streamID string, upsert bool) string {
+	hashComponents := []string{
+		streamID,
+		namespace,
+		fmt.Sprintf("%t", upsert),
+	}
+	return strings.Join(hashComponents, "-")
 }
 
 func findAvailablePort() (int, error) {
@@ -129,6 +134,99 @@ func findAvailablePort() (int, error) {
 	return 0, fmt.Errorf("no available ports found between 50051 and 59051")
 }
 
+// getServerConfigJSON generates the JSON configuration for the Iceberg server
+func (i *Iceberg) getServerConfigJSON(port int, upsert bool) ([]byte, error) {
+	// Create the server configuration map
+	serverConfig := map[string]string{
+		"port":                 fmt.Sprintf("%d", port),
+		"warehouse":            i.config.IcebergS3Path,
+		"table-namespace":      i.config.IcebergDatabase,
+		"catalog-name":         "olake_iceberg",
+		"table-prefix":         "",
+		"upsert":               strconv.FormatBool(upsert),
+		"upsert-keep-deletes":  "true",
+		"write.format.default": "parquet",
+	}
+
+	// Configure catalog implementation based on the selected type
+	switch i.config.CatalogType {
+	case GlueCatalog:
+		serverConfig["catalog-impl"] = "org.apache.iceberg.aws.glue.GlueCatalog"
+	case JDBCCatalog:
+		serverConfig["catalog-impl"] = "org.apache.iceberg.jdbc.JdbcCatalog"
+		serverConfig["uri"] = i.config.JDBCUrl
+		if i.config.JDBCUsername != "" {
+			serverConfig["jdbc.user"] = i.config.JDBCUsername
+		}
+		if i.config.JDBCPassword != "" {
+			serverConfig["jdbc.password"] = i.config.JDBCPassword
+		}
+	case HiveCatalog:
+		serverConfig["catalog-impl"] = "org.apache.iceberg.hive.HiveCatalog"
+		serverConfig["uri"] = i.config.HiveUri
+		serverConfig["clients"] = i.config.HiveClients
+		serverConfig["hive.metastore.sasl.enabled"] = strconv.FormatBool(i.config.HiveSaslEnabled)
+		serverConfig["engine.hive.enabled"] = "true"
+	case RestCatalog:
+		serverConfig["catalog-impl"] = "org.apache.iceberg.rest.RestCatalog"
+		serverConfig["uri"] = i.config.RestCatalogUrl
+
+	default:
+		return nil, fmt.Errorf("unsupported catalog type: %s", i.config.CatalogType)
+	}
+
+	// Configure S3 file IO
+	serverConfig["io-impl"] = "org.apache.iceberg.aws.s3.S3FileIO"
+
+	// Only set access keys if explicitly provided, otherwise they'll be picked up from
+	// environment variables or AWS credential files
+	if i.config.AccessKey != "" {
+		serverConfig["s3.access-key-id"] = i.config.AccessKey
+	}
+	if i.config.SecretKey != "" {
+		serverConfig["s3.secret-access-key"] = i.config.SecretKey
+	}
+	// If profile is specified, add it to the config
+	if i.config.ProfileName != "" {
+		serverConfig["aws.profile"] = i.config.ProfileName
+	}
+
+	// Use path-style access by default for S3-compatible services
+	if i.config.S3PathStyle {
+		serverConfig["s3.path-style-access"] = "true"
+	} else {
+		serverConfig["s3.path-style-access"] = "false"
+	}
+
+	// Add AWS session token if provided
+	if i.config.SessionToken != "" {
+		serverConfig["aws.session-token"] = i.config.SessionToken
+	}
+
+	// Configure region for AWS S3
+	if i.config.Region != "" {
+		serverConfig["s3.region"] = i.config.Region
+	} else if i.config.S3Endpoint == "" && i.config.CatalogType == GlueCatalog {
+		// If no region is explicitly provided for Glue catalog, add a note that it will be picked from environment
+		logger.Warn("No region explicitly provided for Glue catalog, the Java process will attempt to use region from AWS environment")
+	}
+
+	// Configure custom endpoint for S3-compatible services (like MinIO)
+	if i.config.S3Endpoint != "" {
+		serverConfig["s3.endpoint"] = i.config.S3Endpoint
+		serverConfig["io-impl"] = "org.apache.iceberg.io.ResolvingFileIO"
+		// Set SSL/TLS configuration
+		if i.config.S3UseSSL {
+			serverConfig["s3.ssl-enabled"] = "true"
+		} else {
+			serverConfig["s3.ssl-enabled"] = "false"
+		}
+	}
+
+	// Marshal the config to JSON
+	return json.Marshal(serverConfig)
+}
+
 func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 	// Create JSON config for the Java server
 	err := i.config.Validate()
@@ -138,14 +236,16 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 
 	// Get the stream ID - if no stream, use a check-specific ID
 	var streamID string
+	var namespace string
 	if i.stream == nil {
 		// For check operations or when stream isn't available
-		streamID = "check_" + utils.ULID() // Generate a unique ID for check operations
+		streamID = "check_" + utils.ULID()
+		namespace = "check" // Generate a unique ID for check operations
 	} else {
 		streamID = i.stream.ID()
+		namespace = i.stream.Namespace()
 	}
-
-	configHash := getConfigHash(i.config, streamID, upsert)
+	configHash := getConfigHash(namespace, streamID, upsert)
 
 	// Acquire lock to access registry
 	registryMutex.Lock()
@@ -171,29 +271,8 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 
 	i.port = port
 
-	// Add port to server config
-	serverConfig := map[string]string{
-		"port":                 fmt.Sprintf("%d", port),
-		"catalog-impl":         "org.apache.iceberg.aws.glue.GlueCatalog",
-		"io-impl":              "org.apache.iceberg.aws.s3.S3FileIO",
-		"warehouse":            i.config.S3Path,
-		"table-namespace":      i.config.Database,
-		"catalog-name":         "olake_iceberg",
-		"glue.region":          i.config.Region,
-		"s3.access-key-id":     i.config.AccessKey,
-		"s3.secret-access-key": i.config.SecretKey,
-		"table-prefix":         "",
-		"upsert":               strconv.FormatBool(upsert),
-		"upsert-keep-deletes":  "true",
-		"write.format.default": "parquet",
-		"s3.path-style-access": "true",
-	}
-
-	if i.config.SessionToken != "" {
-		serverConfig["aws.session-token"] = i.config.SessionToken
-	}
-
-	configJSON, err := json.Marshal(serverConfig)
+	// Get the server configuration JSON
+	configJSON, err := i.getServerConfigJSON(port, upsert)
 	if err != nil {
 		return fmt.Errorf("failed to create server config: %v", err)
 	}
@@ -207,6 +286,35 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 
 	// Start the Java server process
 	i.cmd = exec.Command("java", "-jar", i.config.JarPath, string(configJSON))
+
+	// Set environment variables for AWS credentials and region when using Glue catalog
+	if i.config.CatalogType == GlueCatalog {
+		// Get current environment
+		env := i.cmd.Env
+		if env == nil {
+			env = []string{}
+		}
+
+		// Add AWS credentials and region as environment variables if provided
+		if i.config.AccessKey != "" {
+			env = append(env, "AWS_ACCESS_KEY_ID="+i.config.AccessKey)
+		}
+		if i.config.SecretKey != "" {
+			env = append(env, "AWS_SECRET_ACCESS_KEY="+i.config.SecretKey)
+		}
+		if i.config.Region != "" {
+			env = append(env, "AWS_REGION="+i.config.Region)
+		}
+		if i.config.SessionToken != "" {
+			env = append(env, "AWS_SESSION_TOKEN="+i.config.SessionToken)
+		}
+		if i.config.ProfileName != "" {
+			env = append(env, "AWS_PROFILE="+i.config.ProfileName)
+		}
+
+		// Update the command's environment
+		i.cmd.Env = env
+	}
 
 	// Set the command's stdout and stderr to our pipes
 	i.cmd.Stdout = stdoutWriter

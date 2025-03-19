@@ -425,12 +425,6 @@
       </exclusions>
     </dependency>
     <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-      <version>42.7.4</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
       <groupId>io.minio</groupId>
       <artifactId>minio</artifactId>
       <version>8.5.17</version>

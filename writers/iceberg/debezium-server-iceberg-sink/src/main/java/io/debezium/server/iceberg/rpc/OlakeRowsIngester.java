@@ -53,48 +53,62 @@ public class OlakeRowsIngester extends StringArrayServiceGrpc.StringArrayService
         // Retrieve the array of strings from the request
         List<String> messages = request.getMessagesList();
 
-        long parsingStartTime = System.currentTimeMillis();
-        Map<String, List<RecordConverter>> result =
-                messages.parallelStream() // Use parallel stream for concurrent processing
-                        .map(message -> {
-                            try {
-                                // Read the entire JSON message into a Map<String, Object>:
-                                Map<String, Object> messageMap = objectMapper.readValue(message, new TypeReference<Map<String, Object>>() {});
+        try {
+            long parsingStartTime = System.currentTimeMillis();
+            Map<String, List<RecordConverter>> result =
+                    messages.parallelStream() // Use parallel stream for concurrent processing
+                            .map(message -> {
+                                try {
+                                    // Read the entire JSON message into a Map<String, Object>:
+                                    Map<String, Object> messageMap = objectMapper.readValue(message, new TypeReference<Map<String, Object>>() {});
 
-                                // Get the destination table:
-                                String destinationTable = (String) messageMap.get("destination_table");
+                                    // Get the destination table:
+                                    String destinationTable = (String) messageMap.get("destination_table");
 
-                                // Get key and value objects directly without re-serializing
-                                Object key = messageMap.get("key");
-                                Object value = messageMap.get("value");
+                                    // Get key and value objects directly without re-serializing
+                                    Object key = messageMap.get("key");
+                                    Object value = messageMap.get("value");
 
-                                // Convert to bytes only once
-                                byte[] keyBytes = key != null ? objectMapper.writeValueAsBytes(key) : null;
-                                byte[] valueBytes = objectMapper.writeValueAsBytes(value);
+                                    // Convert to bytes only once
+                                    byte[] keyBytes = key != null ? objectMapper.writeValueAsBytes(key) : null;
+                                    byte[] valueBytes = objectMapper.writeValueAsBytes(value);
 
-                                return new RecordConverter(destinationTable, valueBytes, keyBytes);
-                            } catch (Exception e) {
-                                throw new RuntimeException("Error parsing message as JSON", e);
-                            }
-                        })
-                        .collect(Collectors.groupingBy(RecordConverter::destination));
-        LOGGER.info("{} Parsing messages took: {} ms", requestId, (System.currentTimeMillis() - parsingStartTime));
+                                    return new RecordConverter(destinationTable, valueBytes, keyBytes);
+                                } catch (Exception e) {
+                                    String errorMessage = String.format("%s Failed to parse message: %s", requestId, message);
+                                    LOGGER.error(errorMessage, e);
+                                    throw new RuntimeException(errorMessage, e);
+                                }
+                            })
+                            .collect(Collectors.groupingBy(RecordConverter::destination));
+            LOGGER.info("{} Parsing messages took: {} ms", requestId, (System.currentTimeMillis() - parsingStartTime));
 
-        // consume list of events for each destination table
-        long processingStartTime = System.currentTimeMillis();
-        for (Map.Entry<String, List<RecordConverter>> tableEvents : result.entrySet()) {
-            Table icebergTable = this.loadIcebergTable(TableIdentifier.of(icebergNamespace, tableEvents.getKey()), tableEvents.getValue().get(0));
-            icebergTableOperator.addToTable(icebergTable, tableEvents.getValue());
+            // consume list of events for each destination table
+            long processingStartTime = System.currentTimeMillis();
+            for (Map.Entry<String, List<RecordConverter>> tableEvents : result.entrySet()) {
+                try {
+                    Table icebergTable = this.loadIcebergTable(TableIdentifier.of(icebergNamespace, tableEvents.getKey()), tableEvents.getValue().get(0));
+                    icebergTableOperator.addToTable(icebergTable, tableEvents.getValue());
+                } catch (Exception e) {
+                    String errorMessage = String.format("%s Failed to process table events for table: %s", requestId, tableEvents.getKey());
+                    LOGGER.error(errorMessage, e);
+                    throw e;
+                }
+            }
+            LOGGER.info("{} Processing tables took: {} ms", requestId, (System.currentTimeMillis() - processingStartTime));
+
+            // Build and send a response
+            Messaging.StringArrayResponse response = Messaging.StringArrayResponse.newBuilder()
+                    .setResult(requestId + " Received " + messages.size() + " messages")
+                    .build();
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+            LOGGER.info("{} Total time taken: {} ms", requestId, (System.currentTimeMillis() - startTime));
+        } catch (Exception e) {
+            String errorMessage = String.format("%s Failed to process request: %s", requestId, e.getMessage());
+            LOGGER.error(errorMessage, e);
+            responseObserver.onError(io.grpc.Status.INTERNAL.withDescription(errorMessage).asRuntimeException());
         }
-        LOGGER.info("{} Processing tables took: {} ms", requestId, (System.currentTimeMillis() - processingStartTime));
-
-        // Build and send a response
-        Messaging.StringArrayResponse response = Messaging.StringArrayResponse.newBuilder()
-                .setResult(requestId + " Received " + messages.size() + " messages")
-                .build();
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
-        LOGGER.info("{} Total time taken: {} ms", requestId, (System.currentTimeMillis() - startTime));
     }
 
     public Table loadIcebergTable(TableIdentifier tableId, RecordConverter sampleEvent) {
@@ -102,7 +116,9 @@ public class OlakeRowsIngester extends StringArrayServiceGrpc.StringArrayService
             try {
                 return IcebergUtil.createIcebergTable(icebergCatalog, tableId, sampleEvent.icebergSchema(true), "parquet");
             } catch (Exception e) {
-                throw new DebeziumException("Failed to create table from debezium event schema:" + tableId + " Error:" + e.getMessage(), e);
+                String errorMessage = String.format("Failed to create table from debezium event schema: %s Error: %s", tableId, e.getMessage());
+                LOGGER.error(errorMessage, e);
+                throw new DebeziumException(errorMessage, e);
             }
         });
     }

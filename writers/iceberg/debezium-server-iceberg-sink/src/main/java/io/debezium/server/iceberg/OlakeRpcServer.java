@@ -42,6 +42,8 @@ public class OlakeRpcServer {
             System.exit(1);
         }
 
+        
+
         String jsonConfig = args[0];
         ObjectMapper objectMapper = new ObjectMapper();
         Map<String, String> configMap = objectMapper.readValue(jsonConfig, new TypeReference<Map<String, String>>() {

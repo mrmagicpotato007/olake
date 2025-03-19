@@ -37,7 +37,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 			return fmt.Errorf("failed to calculate chunks: %s", err)
 		}
 		splitChunks = chunks.Array()
-		m.State.SetChunks(stream.Self(), types.NewSet(splitChunks...))
+		m.State.SetChunks(stream.Self(), chunks)
 	} else {
 		splitChunks = stateChunks.Array()
 	}
@@ -52,81 +52,57 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 	// Process chunks concurrently
 	processChunk := func(ctx context.Context, chunk types.Chunk, number int) (err error) {
 		// Begin transaction with repeatable read isolation
-		tx, err := m.db.BeginTx(backfillCtx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-
-		// Get primary key column
-		pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
-		if pkColumn == "" {
-			return fmt.Errorf("no primary key found for stream %s", stream.ID())
-		}
-
-		// Build query for the chunk
-		stmt := jdbc.ChunkDataQuery(stream, pkColumn)
-		setter := jdbc.NewReader(backfillCtx, stmt, 0, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-			return tx.QueryContext(ctx, query, args...)
-		}, chunk.Min, chunk.Max)
-
-		// Track batch start time for logging
-		batchStartTime := time.Now()
-		waitChannel := make(chan error, 1)
-		insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
-		if err != nil {
-			return fmt.Errorf("failed to create writer thread: %s", err)
-		}
-		defer func() {
-			insert.Close()
-			if err == nil {
-				// Wait for chunk completion
-				err = <-waitChannel
+		return m.withIsolation(backfillCtx, func(tx *sql.Tx) error {
+			// Get primary key column
+			pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
+			if pkColumn == "" {
+				return fmt.Errorf("no primary key found for stream %s", stream.ID())
 			}
-			// Log completion and update state if successful
-			if err == nil {
-				logger.Infof("chunk[%d] with min[%v]-max[%v] completed in %0.2f seconds", number, chunk.Min, chunk.Max, time.Since(batchStartTime).Seconds())
-				m.State.RemoveChunk(stream.Self(), chunk)
-			}
-		}()
 
-		// Capture and process rows
-		return setter.Capture(func(rows *sql.Rows) error {
-			columns, err := rows.Columns()
+			// Build query for the chunk
+			stmt := jdbc.ChunkDataQuery(stream, pkColumn)
+			setter := jdbc.NewReader(backfillCtx, stmt, 0, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+				return tx.QueryContext(ctx, query, args...)
+			}, chunk.Min, chunk.Max)
+
+			// Track batch start time for logging
+			batchStartTime := time.Now()
+			waitChannel := make(chan error, 1)
+			insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
 			if err != nil {
-				return fmt.Errorf("failed to get columns: %w", err)
+				return fmt.Errorf("failed to create writer thread: %s", err)
 			}
-
-			for rows.Next() {
-				values := make([]interface{}, len(columns))
-				valuePtrs := make([]interface{}, len(columns))
-				for i := range values {
-					valuePtrs[i] = &values[i]
+			defer func() {
+				insert.Close()
+				if err == nil {
+					// Wait for chunk completion
+					err = <-waitChannel
 				}
-
-				if err := rows.Scan(valuePtrs...); err != nil {
-					return fmt.Errorf("failed to scan row: %w", err)
+				// Log completion and update state if successful
+				if err == nil {
+					logger.Infof("chunk[%d] with min[%v]-max[%v] completed in %0.2f seconds", number, chunk.Min, chunk.Max, time.Since(batchStartTime).Seconds())
+					m.State.RemoveChunk(stream.Self(), chunk)
 				}
+			}()
 
-				record := make(map[string]interface{})
-				for i, col := range columns {
-					if b, ok := values[i].([]byte); ok {
-						record[col] = string(b)
-						continue
-					}
-					record[col] = values[i]
-				}
-
-				// Calculate record hash using primary key
-				recordHash := utils.GetKeysHash(record, pkColumn)
-				// Create and insert record
-				err = insert.Insert(types.CreateRawRecord(recordHash, record, time.Now().UnixNano()))
+			// Capture and process rows
+			return setter.Capture(func(rows *sql.Rows) error {
+				//crrate a map to hold column names and values
+				record := make(types.Record)
+				//scan the row into map
+				err := utils.MapScan(rows, record)
 				if err != nil {
-					return fmt.Errorf("failed to insert record: %w", err)
+					return fmt.Errorf("failed to mapScan record data: %s", err)
 				}
-			}
-
-			return rows.Err()
+				//genrate olake id
+				olakeID := utils.GetKeysHash(record, stream.GetStream().SourceDefinedPrimaryKey.Array()...)
+				//insert record
+				err = insert.Insert(types.CreateRawRecord(olakeID, record, 0))
+				if err != nil {
+					return err
+				}
+				return nil
+			})
 		})
 	}
 
@@ -234,6 +210,7 @@ func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 func (m *MySQL) withIsolation(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)

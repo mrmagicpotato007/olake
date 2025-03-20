@@ -18,7 +18,7 @@ type Connection struct {
 }
 
 // NewConnection creates a new binlog connection starting from the given position.
-func NewConnection(ctx context.Context, config *Config, pos mysql.Position) (*Connection, error) {
+func NewConnection(_ context.Context, config *Config, pos mysql.Position) (*Connection, error) {
 	syncerConfig := replication.BinlogSyncerConfig{
 		ServerID:        config.ServerID,
 		Flavor:          config.Flavor,

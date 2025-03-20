@@ -2,6 +2,7 @@ package driver
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/datazip-inc/olake/types"
@@ -10,7 +11,7 @@ import (
 
 // Config represents the configuration for connecting to a MySQL database
 type Config struct {
-	Hosts         []string       `json:"hosts"`
+	Host          string         `json:"hosts"`
 	Username      string         `json:"username"`
 	Password      string         `json:"password"`
 	Database      string         `json:"database"`
@@ -27,50 +28,34 @@ func (c *Config) URI() string {
 	if c.Port == 0 {
 		c.Port = 3306
 	}
-
-	// Construct connection parameters
-	params := []string{
-		"parseTime=true", // Enable parsing of TIME/DATE/DATETIME columns
-		fmt.Sprintf("maxAllowedPacket=%d", 16<<20), // 16MB max packet size
-	}
-
-	// Handle TLS configuration
-	if c.TLSSkipVerify {
-		params = append(params, "tls=skip-verify") // Skip certificate verification
-	} else {
-		params = append(params, "tls=true") // Use standard TLS verification
-	}
-
 	// Construct host string
-	hostStr := strings.Join(c.Hosts, ",")
-	if len(c.Hosts) == 0 {
+	hostStr := c.Host
+	if c.Host == "" {
 		hostStr = "localhost"
 	}
 
 	// Construct full connection string
 	return fmt.Sprintf(
-		"%s:%s@tcp(%s:%d)/%s?%s",
-		c.Username,
-		c.Password,
+		"%s:%s@tcp(%s:%d)/%s",
+		url.QueryEscape(c.Username),
+		url.QueryEscape(c.Password),
 		hostStr,
 		c.Port,
-		c.Database,
-		strings.Join(params, "&"),
+		url.QueryEscape(c.Database),
 	)
 }
 
 // Validate checks the configuration for any missing or invalid fields
 func (c *Config) Validate() error {
 	// Validate hosts
-	if len(c.Hosts) == 0 {
+	if len(c.Host) == 0 {
 		return fmt.Errorf("at least one host is required")
 	}
-	for _, host := range c.Hosts {
-		if host == "" {
-			return fmt.Errorf("empty host name")
-		} else if strings.Contains(host, "https") || strings.Contains(host, "http") {
-			return fmt.Errorf("host should not contain http or https: %s", host)
-		}
+
+	if c.Host == "" {
+		return fmt.Errorf("empty host name")
+	} else if strings.Contains(c.Host, "https") || strings.Contains(c.Host, "http") {
+		return fmt.Errorf("host should not contain http or https: %s", c.Host)
 	}
 
 	// Validate port

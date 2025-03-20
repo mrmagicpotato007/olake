@@ -91,7 +91,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 	config := &binlog.Config{
 		ServerID:        gs.ServerID,
 		Flavor:          "mysql",
-		Host:            m.config.Hosts[0],
+		Host:            m.config.Host,
 		Port:            uint16(m.config.Port),
 		User:            m.config.Username,
 		Password:        m.config.Password,

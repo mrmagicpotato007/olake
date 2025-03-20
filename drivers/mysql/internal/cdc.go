@@ -118,7 +118,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 	return conn.StreamMessages(ctx, filter, func(change binlog.CDCChange) error {
 		stream := change.Stream
 		insert := inserters[stream]
-		pkColumn := getPrimaryKeyColumn(m.db, change.Table)
+		pkColumn := getPrimaryKeyColumn(m.client, change.Table)
 		deleteTS := utils.Ternary(change.Kind == "delete", change.Timestamp.UnixMilli(), int64(0)).(int64)
 		record := types.CreateRawRecord(
 			utils.GetKeysHash(change.Data, pkColumn),
@@ -137,7 +137,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 
 // getCurrentBinlogPosition retrieves the current binlog position from MySQL.
 func (m *MySQL) getCurrentBinlogPosition() (mysql.Position, error) {
-	rows, err := m.db.Query(jdbc.MySQLMasterStatusQuery())
+	rows, err := m.client.Query(jdbc.MySQLMasterStatusQuery())
 	if err != nil {
 		return mysql.Position{}, fmt.Errorf("failed to get master status: %s", err)
 	}

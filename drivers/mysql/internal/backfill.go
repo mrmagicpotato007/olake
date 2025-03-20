@@ -22,7 +22,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 	// Get approximate row count and inform the pool
 	var approxRowCount int64
 	approxRowCountQuery := jdbc.MySQLTableRowsQuery()
-	err := m.db.QueryRow(approxRowCountQuery, stream.Name()).Scan(&approxRowCount)
+	err := m.client.QueryRow(approxRowCountQuery, stream.Name()).Scan(&approxRowCount)
 	if err != nil {
 		return fmt.Errorf("failed to get approx row count: %s", err)
 	}
@@ -54,7 +54,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 		// Begin transaction with repeatable read isolation
 		return m.withIsolation(backfillCtx, func(tx *sql.Tx) error {
 			// Get primary key column
-			pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
+			pkColumn := getPrimaryKeyColumn(m.client, stream.Name())
 			if pkColumn == "" {
 				return fmt.Errorf("no primary key found for stream %s", stream.ID())
 			}
@@ -112,7 +112,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.Chunk]) error {
 	return m.withIsolation(context.Background(), func(tx *sql.Tx) error {
 		// Get primary key column using the provided function
-		pkColumn := getPrimaryKeyColumn(m.db, stream.Name())
+		pkColumn := getPrimaryKeyColumn(m.client, stream.Name())
 		if pkColumn == "" {
 			return fmt.Errorf("no primary key found for stream %s", stream.ID())
 		}
@@ -200,7 +200,7 @@ func getPrimaryKeyColumn(db *sql.DB, table string) string {
 func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 	var totalRecords int
 	query := jdbc.MySQLTableRowsQuery()
-	err := m.db.QueryRow(query, stream.Name()).Scan(&totalRecords)
+	err := m.client.QueryRow(query, stream.Name()).Scan(&totalRecords)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get estimated records count:%v", err)
 	}
@@ -208,7 +208,7 @@ func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 }
 
 func (m *MySQL) withIsolation(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := m.db.BeginTx(ctx, &sql.TxOptions{
+	tx, err := m.client.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
 		ReadOnly:  true,
 	})

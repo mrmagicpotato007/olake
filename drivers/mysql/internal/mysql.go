@@ -26,7 +26,7 @@ const (
 type MySQL struct {
 	*base.Driver
 	config *Config
-	db     *sql.DB
+	client *sql.DB
 }
 
 func (m *MySQL) StateType() types.StateType {
@@ -51,8 +51,12 @@ func (m *MySQL) Spec() any {
 
 // Setup establishes the database connection
 func (m *MySQL) Setup() error {
+	err := m.config.Validate()
+	if err != nil {
+		return fmt.Errorf("failed to validate config: %s", err)
+	}
 	// Open database connection
-	db, err := sql.Open("mysql", m.config.URI())
+	client, err := sql.Open("mysql", m.config.URI())
 	if err != nil {
 		return fmt.Errorf("failed to open database connection: %w", err)
 	}
@@ -60,12 +64,13 @@ func (m *MySQL) Setup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := client.PingContext(ctx); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	m.db = db
+	m.client = client
 	// Enable CDC support if binlog is configured
+	//TODO : check for mysql binlog permisssions
 	m.CDCSupport = true
 	return nil
 }
@@ -93,7 +98,7 @@ func (m *MySQL) Discover(discoverSchema bool) ([]*types.Stream, error) {
 
 	query := jdbc.MySQLDiscoverTablesQuery()
 
-	rows, err := m.db.QueryContext(discoverCtx, query, m.config.Database)
+	rows, err := m.client.QueryContext(discoverCtx, query, m.config.Database)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
@@ -150,29 +155,23 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 
 	query := jdbc.MySQLTableSchemaQuery()
 
-	rows, err := m.db.QueryContext(ctx, query, schemaName, tableName)
+	rows, err := m.client.QueryContext(ctx, query, schemaName, tableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query column information: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var columnName, dataType, isNullable, columnType, columnKey string
-		if err := rows.Scan(&columnName, &dataType, &isNullable, &columnType, &columnKey); err != nil {
+		var columnName, columnType, dataType, isNullable, columnKey string
+		if err := rows.Scan(&columnName, &columnType, &dataType, &isNullable, &columnKey); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %w", err)
 		}
-
-		key := strings.Split(strings.Split(strings.ToLower(dataType), "(")[0], " ")[0]
-		// Further split on space to handle "unsigned int" or similar
 		datatype := types.Unknown
 
-		// Special case for tinyint(1) as boolean
-		if key == "tinyint" && strings.Contains(strings.ToLower(columnType), "tinyint(1)") {
-			datatype = types.Bool
-		} else if val, found := mysqlTypeToDataTypes[key]; found {
+		if val, found := mysqlTypeToDataTypes[dataType]; found {
 			datatype = val
 		} else {
-			logger.Warnf("Unsupported MySQL type '%s' (extracted key: %s) for column '%s.%s', defaulting to String", dataType, key, streamName, columnName)
+			logger.Warnf("Unsupported MySQL type '%s'for column '%s.%s', defaulting to String", dataType, streamName, columnName)
 			datatype = types.String
 		}
 		stream.UpsertField(columnName, datatype, strings.EqualFold("yes", isNullable))
@@ -193,17 +192,13 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 		}
 	}
 
-	// Set supported sync modes
-	stream.SupportedSyncModes.Insert("full_refresh")
-
-	if stream.SourceDefinedPrimaryKey.Len() > 0 {
-		stream.WithSyncMode(types.INCREMENTAL)
-		stream.SupportedSyncModes.Insert("incremental")
-	}
-
-	if m.Driver.CDCSupport {
+	// TODO: Populate cursor fields for incremental purpose
+	if m.CDCSupport {
+		stream.WithSyncMode(types.FULLREFRESH)
 		stream.WithSyncMode(types.CDC)
-		stream.SupportedSyncModes.Insert("cdc")
+
+	} else {
+		stream.WithSyncMode(types.FULLREFRESH)
 	}
 
 	return stream, nil
@@ -211,8 +206,8 @@ func (m *MySQL) produceTableSchema(ctx context.Context, streamName string) (*typ
 
 // Close ensures proper cleanup
 func (m *MySQL) Close() error {
-	if m.db != nil {
-		return m.db.Close()
+	if m.client != nil {
+		return m.client.Close()
 	}
 	return nil
 }

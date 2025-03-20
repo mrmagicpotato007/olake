@@ -20,10 +20,10 @@ type CDCDocument struct {
 	FullDocument  map[string]any `json:"fullDocument"`
 }
 
-func (m *Mongo) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
+func (m *Mongo) RunChangeStream(ctx context.Context, pool *protocol.WriterPool, streams ...protocol.Stream) error {
 	// TODO: concurrency based on configuration
 	return utils.Concurrent(context.TODO(), streams, len(streams), func(ctx context.Context, stream protocol.Stream, executionNumber int) error {
-		return m.changeStreamSync(stream, pool)
+		return m.changeStreamSync(ctx, stream, pool)
 	})
 }
 
@@ -38,8 +38,7 @@ func (m *Mongo) StateType() types.StateType {
 }
 
 // does full load on empty state
-func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPool) error {
-	cdcCtx := context.TODO()
+func (m *Mongo) changeStreamSync(cdcCtx context.Context, stream protocol.Stream, pool *protocol.WriterPool) error {
 	collection := m.client.Database(stream.Namespace(), options.Database().SetReadConcern(readconcern.Majority())).Collection(stream.Name())
 	changeStreamOpts := options.ChangeStream().SetFullDocument(options.UpdateLookup)
 	pipeline := mongo.Pipeline{
@@ -64,7 +63,7 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		// save resume token
 		m.State.SetCursor(stream.Self(), cdcCursorField, prevResumeToken)
 
-		if err := m.backfill(stream, pool); err != nil {
+		if err := m.backfill(cdcCtx, pool, stream); err != nil {
 			return err
 		}
 		logger.Infof("backfill done for stream[%s]", stream.ID())

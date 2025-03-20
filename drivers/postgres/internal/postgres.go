@@ -171,12 +171,12 @@ func (p *Postgres) Type() string {
 	return "Postgres"
 }
 
-func (p *Postgres) Read(pool *protocol.WriterPool, stream protocol.Stream) error {
+func (p *Postgres) Read(ctx context.Context, pool *protocol.WriterPool, stream protocol.Stream) error {
 	switch stream.GetSyncMode() {
 	case types.FULLREFRESH:
-		return p.backfill(pool, stream)
+		return p.backfill(ctx, pool, stream)
 	case types.CDC:
-		return p.RunChangeStream(pool, stream)
+		return p.RunChangeStream(ctx, pool, stream)
 	}
 
 	return nil

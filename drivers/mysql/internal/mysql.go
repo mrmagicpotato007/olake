@@ -131,7 +131,7 @@ func (m *MySQL) Read(pool *protocol.WriterPool, stream protocol.Stream) error {
 	case types.FULLREFRESH:
 		return m.backfill(pool, stream)
 	case types.CDC:
-		return m.changeStreamSync(stream, pool)
+		return m.RunChangeStream(pool, stream)
 	}
 
 	return nil

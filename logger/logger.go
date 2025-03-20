@@ -239,7 +239,7 @@ type ProcessOutputReader struct {
 // name is a prefix to identify the process in logs
 // isError determines whether to log as Error (true) or Info (false)
 // returns the reader and a write end that should be connected to the process output
-func NewProcessOutputReader(name string, isError bool) (*ProcessOutputReader, *os.File, error) {
+func NewProcessLogger(name string, isError bool) (*ProcessOutputReader, *os.File, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create pipe: %v", err)

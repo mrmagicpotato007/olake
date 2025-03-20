@@ -22,7 +22,6 @@ import (
 )
 
 func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) error {
-	stream.Self().BackfillInProcess = true
 	collection := m.client.Database(stream.Namespace(), options.Database().SetReadConcern(readconcern.Majority())).Collection(stream.Name())
 	chunks := m.State.GetChunks(stream.Self())
 	backfillCtx := context.TODO()
@@ -71,7 +70,7 @@ func (m *Mongo) backfill(stream protocol.Stream, pool *protocol.WriterPool) erro
 		defer cancelThread()
 
 		waitChannel := make(chan error, 1)
-		insert, err := pool.NewThread(threadContext, stream, protocol.WithErrorChannel(waitChannel))
+		insert, err := pool.NewThread(threadContext, stream, protocol.WithErrorChannel(waitChannel), protocol.WithBackfill(true))
 		if err != nil {
 			return err
 		}

@@ -92,7 +92,7 @@ func (p *Postgres) RunChangeStream(pool *protocol.WriterPool, streams ...protoco
 	// Inserter initialization
 	for _, stream := range streams {
 		errChan := make(chan error)
-		inserter, err := pool.NewThread(ctx, stream, protocol.WithErrorChannel(errChan))
+		inserter, err := pool.NewThread(ctx, stream, protocol.WithErrorChannel(errChan), protocol.WithBackfill(false))
 		if err != nil {
 			return fmt.Errorf("failed to initiate writer thread for stream[%s]: %s", stream.ID(), err)
 		}

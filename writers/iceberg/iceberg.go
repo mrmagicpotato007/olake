@@ -16,15 +16,16 @@ import (
 )
 
 type Iceberg struct {
-	options *protocol.Options
-	config  *Config
-	stream  protocol.Stream
-	records atomic.Int64
-	closed  bool
-	cmd     *exec.Cmd
-	client  proto.StringArrayServiceClient
-	conn    *grpc.ClientConn
-	port    int
+	options  *protocol.Options
+	config   *Config
+	stream   protocol.Stream
+	records  atomic.Int64
+	closed   bool
+	cmd      *exec.Cmd
+	client   proto.StringArrayServiceClient
+	conn     *grpc.ClientConn
+	port     int
+	backfill bool
 }
 
 func (i *Iceberg) GetConfigRef() protocol.Config {
@@ -39,8 +40,8 @@ func (i *Iceberg) Spec() any {
 func (i *Iceberg) Setup(stream protocol.Stream, options *protocol.Options) error {
 	i.options = options
 	i.stream = stream
-
-	return i.SetupIcebergClient(!stream.Self().BackfillInProcess)
+	i.backfill = options.Backfill
+	return i.SetupIcebergClient(options.Backfill)
 }
 
 func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
@@ -51,7 +52,7 @@ func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 	}
 
 	// Get the config hash for this writer instance
-	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), !i.stream.Self().BackfillInProcess)
+	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), i.backfill)
 
 	// Add the record to the batch
 	flushed, err := addToBatch(configHash, debeziumRecord, i.client)
@@ -75,7 +76,7 @@ func (i *Iceberg) Close() error {
 	i.closed = true
 
 	// Get the config hash for this writer instance to flush any remaining records
-	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), !i.stream.Self().BackfillInProcess)
+	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), i.backfill)
 
 	// Flush any remaining records before closing
 	if i.client != nil {

@@ -44,12 +44,12 @@ type Config struct {
 	JDBCPassword string `json:"jdbc_password,omitempty"`
 
 	// Hive specific configuration
-	HiveUri         string `json:"hive_uri,omitempty"`
+	HiveURI         string `json:"hive_uri,omitempty"`
 	HiveClients     string `json:"hive_clients,omitempty"`
 	HiveSaslEnabled bool   `json:"hive_sasl_enabled,omitempty"`
 
 	// Rest Catalog Configuration
-	RestCatalogUrl string `json:"rest_catalog_url,omitempty"`
+	RestCatalogURL string `json:"rest_catalog_url,omitempty"`
 
 	// Iceberg Configuration
 	IcebergDatabase string `json:"iceberg_db,omitempty"`
@@ -105,11 +105,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("jdbc_url is required when using JDBC catalog")
 		}
 	} else if c.CatalogType == RestCatalog {
-		if c.RestCatalogUrl == "" {
+		if c.RestCatalogURL == "" {
 			return fmt.Errorf("rest_catalog_url is required when using REST catalog")
 		}
 	} else if c.CatalogType == HiveCatalog {
-		if c.HiveUri == "" {
+		if c.HiveURI == "" {
 			return fmt.Errorf("hive_uri is required when using Hive catalog")
 		}
 	} else if c.CatalogType != GlueCatalog {

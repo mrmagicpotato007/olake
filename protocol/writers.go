@@ -25,6 +25,7 @@ type Options struct {
 	Identifier   string
 	Number       int64
 	errorChannel chan error
+	Backfill     bool
 }
 
 type ThreadOptions func(opt *Options)
@@ -44,6 +45,12 @@ func WithNumber(number int64) ThreadOptions {
 func WithErrorChannel(errChan chan error) ThreadOptions {
 	return func(opt *Options) {
 		opt.errorChannel = errChan
+	}
+}
+
+func WithBackfill(backfill bool) ThreadOptions {
+	return func(opt *Options) {
+		opt.Backfill = backfill
 	}
 }
 

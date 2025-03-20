@@ -82,7 +82,7 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 	}
 	defer cursor.Close(cdcCtx)
 
-	insert, err := pool.NewThread(cdcCtx, stream)
+	insert, err := pool.NewThread(cdcCtx, stream, protocol.WithBackfill(false))
 	if err != nil {
 		return err
 	}
@@ -96,15 +96,7 @@ func (m *Mongo) changeStreamSync(stream protocol.Stream, pool *protocol.WriterPo
 		}
 		handleObjectID(record.FullDocument)
 
-		// TODO: Handle Deleted documents (Good First Issue)
-		// Map MongoDB operation types to Debezium format
-		opType := "c" // default to create
-		switch record.OperationType {
-		case "update":
-			opType = "u"
-		case "delete":
-			opType = "d"
-		}
+		opType := utils.Ternary(record.OperationType == "update", "u", utils.Ternary(record.OperationType == "delete", "d", "c")).(string)
 
 		rawRecord := types.CreateRawRecord(
 			utils.GetKeysHash(record.FullDocument, constants.MongoPrimaryID),

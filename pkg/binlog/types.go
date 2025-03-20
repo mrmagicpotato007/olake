@@ -21,7 +21,7 @@ type Config struct {
 }
 
 // BinlogState holds the current binlog position.
-type BinlogState struct {
+type Binlog struct {
 	Position mysql.Position `json:"position"`
 }
 

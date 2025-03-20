@@ -14,7 +14,7 @@ func MinMaxQuery(stream protocol.Stream, column string) string {
 
 // NextChunkEndQuery returns the query to calculate the next chunk boundary
 func NextChunkEndQuery(stream protocol.Stream, column string, chunkSize int) string {
-	return fmt.Sprintf(`SELECT MAX(%[1]s) FROM (SELECT %[1]s FROM %[2]s.%[3]s WHERE %[1]s > ? ORDER BY %[1]s LIMIT ?) AS subquery`, column, stream.Namespace(), stream.Name())
+	return fmt.Sprintf(`SELECT MAX(%[1]s) FROM (SELECT %[1]s FROM %[2]s.%[3]s WHERE %[1]s > ? ORDER BY %[1]s LIMIT %[4]d) AS subquery`, column, stream.Namespace(), stream.Name(), chunkSize)
 }
 
 // ChunkDataQuery returns the query to fetch data for a specific chunk

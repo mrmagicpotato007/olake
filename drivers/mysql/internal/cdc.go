@@ -17,7 +17,7 @@ import (
 // MySQLGlobalState tracks the binlog position and backfilled streams.
 type MySQLGlobalState struct {
 	ServerID uint32             `json:"server_id"`
-	State    binlog.BinlogState `json:"state"`
+	State    binlog.Binlog      `json:"state"`
 	Streams  *types.Set[string] `json:"streams"`
 }
 
@@ -27,7 +27,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 
 	// Load or initialize global state
 	gs := &MySQLGlobalState{
-		State:   binlog.BinlogState{Position: mysql.Position{}},
+		State:   binlog.Binlog{Position: mysql.Position{}},
 		Streams: types.NewSet[string](),
 	}
 	if m.State.Global != nil {
@@ -60,7 +60,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		}
 	}
 	if len(needsBackfill) > 0 {
-		if err := utils.Concurrent(ctx, needsBackfill, len(needsBackfill), func(ctx context.Context, s protocol.Stream, _ int) error {
+		if err := utils.Concurrent(ctx, needsBackfill, len(needsBackfill), func(_ context.Context, s protocol.Stream, _ int) error {
 			if err := m.backfill(pool, s); err != nil {
 				return fmt.Errorf("failed backfill of stream[%s]: %s", s.ID(), err)
 			}

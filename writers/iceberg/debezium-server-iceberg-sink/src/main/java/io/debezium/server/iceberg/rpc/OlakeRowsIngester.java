@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
 
 // This class is used to receive rows from the Olake Golang project and dump it into iceberg using prebuilt code here.
 @Dependent
-public class OlakeRowsIngester extends StringArrayServiceGrpc.StringArrayServiceImplBase {
+public class OlakeRowsIngester extends RecordIngestServiceGrpc.RecordIngestServiceImplBase {
     private static final Logger LOGGER = LoggerFactory.getLogger(OlakeRowsIngester.class);
 
     private String icebergNamespace = "public";
@@ -47,7 +47,7 @@ public class OlakeRowsIngester extends StringArrayServiceGrpc.StringArrayService
     }
 
     @Override
-    public void sendStringArray(Messaging.StringArrayRequest request, StreamObserver<Messaging.StringArrayResponse> responseObserver) {
+    public void sendRecords(RecordIngest.RecordIngestRequest request, StreamObserver<RecordIngest.RecordIngestResponse> responseObserver) {
         String requestId = String.format("[Thread-%d-%d]", Thread.currentThread().getId(), System.nanoTime());
         long startTime = System.currentTimeMillis();
         // Retrieve the array of strings from the request
@@ -98,7 +98,7 @@ public class OlakeRowsIngester extends StringArrayServiceGrpc.StringArrayService
             LOGGER.info("{} Processing tables took: {} ms", requestId, (System.currentTimeMillis() - processingStartTime));
 
             // Build and send a response
-            Messaging.StringArrayResponse response = Messaging.StringArrayResponse.newBuilder()
+            RecordIngest.RecordIngestResponse response = RecordIngest.RecordIngestResponse.newBuilder()
                     .setResult(requestId + " Received " + messages.size() + " messages")
                     .build();
             responseObserver.onNext(response);

@@ -35,7 +35,16 @@ type RawRecord struct {
 	CdcTimestamp   int64          `parquet:"_"`
 }
 
-func (r *RawRecord) GetDebeziumJSON(db string, stream string, normalization bool) (string, error) {
+func CreateRawRecord(olakeID string, data map[string]any, operationType string, cdcTimestamp int64) RawRecord {
+	return RawRecord{
+		OlakeID:       olakeID,
+		Data:          data,
+		OperationType: operationType,
+		CdcTimestamp:  cdcTimestamp,
+	}
+}
+
+func (r *RawRecord) ToDebeziumFormat(db string, stream string, normalization bool) (string, error) {
 	// First create the schema and track field types
 	schema := r.createDebeziumSchema(db, stream, normalization)
 
@@ -135,10 +144,6 @@ func (r *RawRecord) createDebeziumSchema(db string, stream string, normalization
 				field["type"] = "float32"
 			case float64:
 				field["type"] = "float64"
-			case map[string]interface{}:
-				field["type"] = "string"
-			case []interface{}:
-				field["type"] = "string"
 			default:
 				field["type"] = "string"
 			}
@@ -186,14 +191,6 @@ func (r *RawRecord) createDebeziumSchema(db string, stream string, normalization
 	}
 }
 
-func CreateRawRecord(olakeID string, data map[string]any, operationType string, cdcTimestamp int64) RawRecord {
-	return RawRecord{
-		OlakeID:       olakeID,
-		Data:          data,
-		OperationType: operationType,
-		CdcTimestamp:  cdcTimestamp,
-	}
-}
 func (d DataType) ToNewParquet() parquet.Node {
 	var n parquet.Node
 

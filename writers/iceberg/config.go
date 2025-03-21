@@ -130,20 +130,20 @@ func (c *Config) Validate() error {
 
 		// First, check if the JAR exists in the base directory
 		baseJarPath := fmt.Sprintf("%s/debezium-server-iceberg-sink.jar", execDir)
-		if _, err := os.Stat(baseJarPath); err == nil {
+		if err := utils.CheckIfFilesExists(baseJarPath); err == nil {
 			// JAR file exists in base directory
 			logger.Infof("Iceberg JAR file found in base directory: %s", baseJarPath)
 			c.JarPath = baseJarPath
 		} else {
 			// Otherwise, look in the target directory
 			targetJarPath := fmt.Sprintf("%s/writers/iceberg/debezium-server-iceberg-sink/target/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
-			if _, err := os.Stat(targetJarPath); err == nil {
+			if err := utils.CheckIfFilesExists(targetJarPath); err == nil {
 				logger.Infof("Iceberg JAR file found in target directory: %s", targetJarPath)
 				c.JarPath = targetJarPath
 			} else {
 				// Check the previous location as last resort
 				fallbackPath := fmt.Sprintf("%s/debezium-server-iceberg-sink-0.0.1-SNAPSHOT.jar", execDir)
-				if _, err := os.Stat(fallbackPath); err == nil {
+				if err := utils.CheckIfFilesExists(fallbackPath); err == nil {
 					logger.Infof("Iceberg JAR file found in fallback location: %s", fallbackPath)
 					c.JarPath = fallbackPath
 				} else {

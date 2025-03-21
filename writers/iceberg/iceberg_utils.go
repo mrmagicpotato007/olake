@@ -26,9 +26,9 @@ var portMap sync.Map
 type serverInstance struct {
 	port       int
 	cmd        *exec.Cmd
-	client     proto.StringArrayServiceClient
+	client     proto.RecordIngestServiceClient
 	conn       *grpc.ClientConn
-	refCount   int
+	refCount   int    // Tracks how many clients are using this server instance to manage shared resources. Comes handy when we need to close the server after all clients are done.
 	configHash string // Hash representing the server config
 	upsert     bool
 	streamID   string // Store the stream ID
@@ -74,7 +74,6 @@ var (
 // serverRegistry manages active server instances with proper concurrency control
 var (
 	serverRegistry = make(map[string]*serverInstance)
-	registryMutex  sync.Mutex
 )
 
 // getConfigHash generates a unique identifier for server configuration per stream
@@ -118,12 +117,12 @@ func findAvailablePort() (int, error) {
 				killCmd := exec.Command("kill", "-9", pid)
 				err = killCmd.Run()
 				if err != nil {
-					logger.Warn("Failed to kill process using port %d: %v", p, err)
+					logger.Warnf("Failed to kill process using port %d: %v", p, err)
 					portMap.Delete(p)
 					continue
 				}
 
-				logger.Info("Killed process %s that was using port %d", pid, p)
+				logger.Infof("Killed process %s that was using port %d", pid, p)
 
 				// Wait a moment for the port to be released
 				time.Sleep(time.Second * 5)
@@ -247,10 +246,6 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 	}
 	configHash := getConfigHash(namespace, streamID, upsert)
 
-	// Acquire lock to access registry
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
 	// Check if a server with matching config already exists
 	if server, exists := serverRegistry[configHash]; exists {
 		// Reuse existing server
@@ -259,7 +254,7 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		i.conn = server.conn
 		i.cmd = server.cmd
 		server.refCount++
-		logger.Info("Reusing existing Iceberg server", "port", i.port, "stream", streamID, "refCount", server.refCount)
+		logger.Infof("Reusing existing Iceberg server on port %d for stream %s, refCount %d", i.port, streamID, server.refCount)
 		return nil
 	}
 
@@ -275,13 +270,6 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 	configJSON, err := i.getServerConfigJSON(port, upsert)
 	if err != nil {
 		return fmt.Errorf("failed to create server config: %v", err)
-	}
-
-	// Set up process output capture using the logger utility
-	processName := fmt.Sprintf("Java-Iceberg:%d", i.port)
-	stdoutReader, stderrReader, stdoutWriter, stderrWriter, err := logger.SetupProcessOutputCapture(processName)
-	if err != nil {
-		return fmt.Errorf("failed to set up process output capture: %v", err)
 	}
 
 	// Start the Java server process
@@ -316,26 +304,11 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		i.cmd.Env = env
 	}
 
-	// Set the command's stdout and stderr to our pipes
-	i.cmd.Stdout = stdoutWriter
-	i.cmd.Stderr = stderrWriter
-
-	if err := i.cmd.Start(); err != nil {
-		stdoutReader.Close()
-		stderrReader.Close()
-		stdoutWriter.Close()
-		stderrWriter.Close()
+	// Set up and start the process with logging
+	processName := fmt.Sprintf("Java-Iceberg:%d", i.port)
+	if err := logger.SetupAndStartProcess(processName, i.cmd); err != nil {
 		return fmt.Errorf("failed to start Iceberg server: %v", err)
 	}
-
-	// Start reading from the process output
-	stdoutReader.StartReading()
-	stderrReader.StartReading()
-
-	// Close the write end of the pipes in the parent process
-	// since they're only needed by the child process
-	stdoutWriter.Close()
-	stderrWriter.Close()
 
 	// Connect to gRPC server
 	conn, err := grpc.NewClient(`localhost:`+strconv.Itoa(i.port),
@@ -346,14 +319,14 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		// If connection fails, clean up the process
 		if i.cmd != nil && i.cmd.Process != nil {
 			if killErr := i.cmd.Process.Kill(); killErr != nil {
-				logger.Error("Failed to kill process", "error", killErr)
+				logger.Errorf("Failed to kill process: %v", killErr)
 			}
 		}
 		return fmt.Errorf("failed to connect to iceberg writer: %v", err)
 	}
 
 	i.conn = conn
-	i.client = proto.NewStringArrayServiceClient(conn)
+	i.client = proto.NewRecordIngestServiceClient(conn)
 
 	// Register the new server instance
 	serverRegistry[configHash] = &serverInstance{
@@ -367,7 +340,7 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		streamID:   streamID,
 	}
 
-	logger.Info("Connected to new iceberg writer", "port", i.port, "stream", streamID, "configHash", configHash)
+	logger.Infof("Connected to new iceberg writer on port %d for stream %s, configHash %s", i.port, streamID, configHash)
 	return nil
 }
 
@@ -434,9 +407,6 @@ func (i *Iceberg) CloseIcebergClient() error {
 		return nil // Nothing to close
 	}
 
-	registryMutex.Lock()
-	defer registryMutex.Unlock()
-
 	// Find the server this instance is using
 	var serverKey string
 	for key, server := range serverRegistry {
@@ -464,11 +434,11 @@ func (i *Iceberg) CloseIcebergClient() error {
 
 	// If this was the last reference, shut down the server
 	if server.refCount <= 0 {
-		logger.Info("Shutting down Iceberg server", "port", i.port)
+		logger.Infof("Shutting down Iceberg server on port %d", i.port)
 
 		// Flush any remaining records before shutting down
 		if err := flushBatch(serverKey, server.client); err != nil {
-			logger.Error("Error flushing batch", "error", err)
+			logger.Errorf("Error flushing batch: %v", err)
 			return err
 		}
 
@@ -479,7 +449,7 @@ func (i *Iceberg) CloseIcebergClient() error {
 		if server.cmd != nil && server.cmd.Process != nil {
 			err := server.cmd.Process.Kill()
 			if err != nil {
-				logger.Error("Failed to kill Iceberg server", "error", err)
+				logger.Errorf("Failed to kill Iceberg server: %v", err)
 			}
 		}
 
@@ -492,7 +462,7 @@ func (i *Iceberg) CloseIcebergClient() error {
 		return nil
 	}
 
-	logger.Info("Decreased reference count for Iceberg server", "port", i.port, "refCount", server.refCount)
+	logger.Infof("Decreased reference count for Iceberg server on port %d, refCount %d", i.port, server.refCount)
 
 	// Clear references in this instance but don't close shared resources
 	i.conn = nil
@@ -552,7 +522,7 @@ func getLocalBuffer(configHash string) *LocalBuffer {
 }
 
 // flushLocalBuffer flushes a local buffer to the shared batch
-func flushLocalBuffer(buffer *LocalBuffer, configHash string, client proto.StringArrayServiceClient) error {
+func flushLocalBuffer(buffer *LocalBuffer, configHash string, client proto.RecordIngestServiceClient) error {
 	if len(buffer.records) == 0 {
 		return nil
 	}
@@ -600,7 +570,7 @@ func flushLocalBuffer(buffer *LocalBuffer, configHash string, client proto.Strin
 
 // addToBatch adds a record to the batch for a specific server configuration
 // Returns true if the batch was flushed, false otherwise
-func addToBatch(configHash string, record string, client proto.StringArrayServiceClient) (bool, error) {
+func addToBatch(configHash string, record string, client proto.RecordIngestServiceClient) (bool, error) {
 	// If record is empty, skip it
 	if record == "" {
 		return false, nil
@@ -635,7 +605,7 @@ func addToBatch(configHash string, record string, client proto.StringArrayServic
 }
 
 // flushBatch forces a flush of all local buffers and the shared batch for a config hash
-func flushBatch(configHash string, client proto.StringArrayServiceClient) error {
+func flushBatch(configHash string, client proto.RecordIngestServiceClient) error {
 	// Check if client is nil before attempting to flush
 	if client == nil {
 		return fmt.Errorf("cannot flush batch: gRPC client is nil")
@@ -694,7 +664,7 @@ func flushBatch(configHash string, client proto.StringArrayServiceClient) error 
 }
 
 // sendRecords sends a slice of records to the Iceberg RPC server
-func sendRecords(records []string, client proto.StringArrayServiceClient) error {
+func sendRecords(records []string, client proto.RecordIngestServiceClient) error {
 	// Skip if empty
 	if len(records) == 0 {
 		return nil
@@ -719,7 +689,7 @@ func sendRecords(records []string, client proto.StringArrayServiceClient) error 
 	}
 
 	// Create request with all records
-	req := &proto.StringArrayRequest{
+	req := &proto.RecordIngestRequest{
 		Messages: validRecords,
 	}
 
@@ -728,15 +698,15 @@ func sendRecords(records []string, client proto.StringArrayServiceClient) error 
 	defer cancel()
 
 	// Send the batch to the server
-	res, err := client.SendStringArray(ctx, req)
+	res, err := client.SendRecords(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to send batch: %v", err)
 	}
 
-	logger.Info("Sent batch to Iceberg server",
-		"records", len(records),
-		"size_mb", float64(len(records)*200)/(1024*1024), // Rough estimate
-		"response", res.GetResult())
+	logger.Infof("Sent batch to Iceberg server: %d records, %.2f MB, response: %s",
+		len(records),
+		float64(len(records)*200)/(1024*1024),
+		res.GetResult())
 
 	return nil
 }

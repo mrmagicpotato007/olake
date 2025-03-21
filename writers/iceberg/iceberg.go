@@ -3,11 +3,11 @@ package iceberg
 import (
 	"context"
 	"fmt"
-	"log"
 	"os/exec"
 	"sync/atomic"
 	"time"
 
+	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/typeutils"
@@ -20,9 +20,8 @@ type Iceberg struct {
 	config   *Config
 	stream   protocol.Stream
 	records  atomic.Int64
-	closed   bool
 	cmd      *exec.Cmd
-	client   proto.StringArrayServiceClient
+	client   proto.RecordIngestServiceClient
 	conn     *grpc.ClientConn
 	port     int
 	backfill bool
@@ -46,7 +45,7 @@ func (i *Iceberg) Setup(stream protocol.Stream, options *protocol.Options) error
 
 func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 	// Convert record to Debezium format
-	debeziumRecord, err := record.GetDebeziumJSON(i.config.IcebergDatabase, i.stream.Name(), i.config.Normalization)
+	debeziumRecord, err := record.ToDebeziumFormat(i.config.IcebergDatabase, i.stream.Name(), i.config.Normalization)
 	if err != nil {
 		return fmt.Errorf("failed to convert record: %v", err)
 	}
@@ -62,7 +61,7 @@ func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 
 	// If the batch was flushed, log the event
 	if flushed {
-		log.Printf("Batch flushed to Iceberg server for stream %s", i.stream.Name())
+		logger.Infof("Batch flushed to Iceberg server for stream %s", i.stream.Name())
 	}
 
 	i.records.Add(1)
@@ -70,10 +69,6 @@ func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 }
 
 func (i *Iceberg) Close() error {
-	if i.closed {
-		return nil
-	}
-	i.closed = true
 
 	// Get the config hash for this writer instance to flush any remaining records
 	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), i.backfill)
@@ -82,7 +77,7 @@ func (i *Iceberg) Close() error {
 	if i.client != nil {
 		err := flushBatch(configHash, i.client)
 		if err != nil {
-			log.Printf("Error flushing batch on close: %v", err)
+			logger.Infof("Error flushing batch on close: %v", err)
 		}
 	}
 
@@ -118,27 +113,27 @@ func (i *Iceberg) Check() error {
 	defer cancel()
 
 	// Try to send a test message
-	req := &proto.StringArrayRequest{
+	req := &proto.RecordIngestRequest{
 		Messages: []string{getTestDebeziumRecord()},
 	}
 
 	// Call the remote procedure
-	res, err := i.client.SendStringArray(ctx, req)
+	res, err := i.client.SendRecords(ctx, req)
 	if err != nil {
 		// Clean up before returning error
 		if err := i.CloseIcebergClient(); err != nil {
-			log.Printf("Error closing Iceberg client: %v", err)
+			logger.Infof("Error closing Iceberg client: %v", err)
 			return err
 		}
 		i.stream = originalStream
 		return fmt.Errorf("error sending record to Iceberg RPC Server: %v", err)
 	}
 	// Print the response from the server
-	log.Printf("Server Response: %s", res.GetResult())
+	logger.Infof("Server Response: %s", res.GetResult())
 
 	// Always clean up after Check()
 	if err := i.CloseIcebergClient(); err != nil {
-		log.Printf("Error closing Iceberg client after check: %v", err)
+		logger.Infof("Error closing Iceberg client after check: %v", err)
 		return err
 	}
 

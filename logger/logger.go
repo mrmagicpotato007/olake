@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -281,17 +282,17 @@ func (p *ProcessOutputReader) Close() {
 	})
 }
 
-// SetupProcessOutputCapture creates stdout and stderr readers for a process
+// SetupProcessLogger creates stdout and stderr readers for a process
 // and returns write-ends that should be connected to the process stdout and stderr
-func SetupProcessOutputCapture(processName string) (*ProcessOutputReader, *ProcessOutputReader, *os.File, *os.File, error) {
+func SetupProcessLogger(processName string) (*ProcessOutputReader, *ProcessOutputReader, *os.File, *os.File, error) {
 	// Setup stdout reader
-	stdoutReader, stdoutWriter, err := NewProcessOutputReader(processName, false)
+	stdoutReader, stdoutWriter, err := NewProcessLogger(processName, false)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to create stdout reader: %v", err)
 	}
 
 	// Setup stderr reader
-	stderrReader, stderrWriter, err := NewProcessOutputReader(processName, true)
+	stderrReader, stderrWriter, err := NewProcessLogger(processName, true)
 	if err != nil {
 		stdoutReader.Close()
 		if stdoutWriter != nil {
@@ -301,4 +302,37 @@ func SetupProcessOutputCapture(processName string) (*ProcessOutputReader, *Proce
 	}
 
 	return stdoutReader, stderrReader, stdoutWriter, stderrWriter, nil
+}
+
+// SetupAndStartProcess creates and starts a process with stdout and stderr logged via the logger.
+// It handles the complete process lifecycle including starting the command and managing pipes.
+func SetupAndStartProcess(processName string, cmd *exec.Cmd) error {
+	// Set up process output capture using the logger utility
+	stdoutReader, stderrReader, stdoutWriter, stderrWriter, err := SetupProcessLogger(processName)
+	if err != nil {
+		return fmt.Errorf("failed to set up process output capture: %v", err)
+	}
+
+	// Set the command's stdout and stderr to our pipes
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+
+	if err := cmd.Start(); err != nil {
+		stdoutReader.Close()
+		stderrReader.Close()
+		stdoutWriter.Close()
+		stderrWriter.Close()
+		return fmt.Errorf("failed to start process: %v", err)
+	}
+
+	// Start reading from the process output
+	stdoutReader.StartReading()
+	stderrReader.StartReading()
+
+	// Close the write end of the pipes in the parent process
+	// since they're only needed by the child process
+	stdoutWriter.Close()
+	stderrWriter.Close()
+
+	return nil
 }

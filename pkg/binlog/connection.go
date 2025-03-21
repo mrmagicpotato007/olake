@@ -3,6 +3,7 @@ package binlog
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/datazip-inc/olake/logger"
@@ -86,6 +87,9 @@ func (c *Connection) StreamMessages(ctx context.Context, filter ChangeFilter, ca
 			switch e := ev.Event.(type) {
 			case *replication.RotateEvent:
 				c.currentPos.Name = string(e.NextLogName)
+				if e.Position > math.MaxUint32 {
+					return fmt.Errorf("binlog position overflow: %d exceeds uint32 max value", e.Position)
+				}
 				c.currentPos.Pos = uint32(e.Position)
 				logger.Infof("Binlog rotated to %s:%d", c.currentPos.Name, c.currentPos.Pos)
 

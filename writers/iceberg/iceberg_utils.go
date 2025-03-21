@@ -60,8 +60,6 @@ func getGoroutineID() string {
 
 // batchRegistry tracks batches of records per server configuration
 var (
-	batchRegistry   = make(map[string]*recordBatch)
-	registryRWMutex sync.RWMutex // Using RWMutex for better read concurrency
 	// Maximum batch size before flushing (256MB in bytes)
 	maxBatchSize int64 = 256 * 1024 * 1024
 	// Local buffer threshold before pushing to shared batch (5MB)
@@ -69,6 +67,9 @@ var (
 	// Thread-local buffer cache using sync.Map to avoid locks
 	// Key is configHash + goroutine ID, value is *LocalBuffer
 	localBuffers sync.Map
+	// batchRegistry tracks batches of records per server configuration
+	// Key is configHash, value is *recordBatch
+	batchRegistry sync.Map
 )
 
 // serverRegistry manages active server instances with proper concurrency control
@@ -233,7 +234,6 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 		return fmt.Errorf("failed to validate config: %s", err)
 	}
 
-	// Get the stream ID - if no stream, use a check-specific ID
 	var streamID string
 	var namespace string
 	if i.stream == nil {
@@ -276,33 +276,31 @@ func (i *Iceberg) SetupIcebergClient(upsert bool) error {
 	i.cmd = exec.Command("java", "-jar", i.config.JarPath, string(configJSON))
 
 	// Set environment variables for AWS credentials and region when using Glue catalog
-	if i.config.CatalogType == GlueCatalog {
-		// Get current environment
-		env := i.cmd.Env
-		if env == nil {
-			env = []string{}
-		}
-
-		// Add AWS credentials and region as environment variables if provided
-		if i.config.AccessKey != "" {
-			env = append(env, "AWS_ACCESS_KEY_ID="+i.config.AccessKey)
-		}
-		if i.config.SecretKey != "" {
-			env = append(env, "AWS_SECRET_ACCESS_KEY="+i.config.SecretKey)
-		}
-		if i.config.Region != "" {
-			env = append(env, "AWS_REGION="+i.config.Region)
-		}
-		if i.config.SessionToken != "" {
-			env = append(env, "AWS_SESSION_TOKEN="+i.config.SessionToken)
-		}
-		if i.config.ProfileName != "" {
-			env = append(env, "AWS_PROFILE="+i.config.ProfileName)
-		}
-
-		// Update the command's environment
-		i.cmd.Env = env
+	// Get current environment
+	env := i.cmd.Env
+	if env == nil {
+		env = []string{}
 	}
+
+	// Add AWS credentials and region as environment variables if provided
+	if i.config.AccessKey != "" {
+		env = append(env, "AWS_ACCESS_KEY_ID="+i.config.AccessKey)
+	}
+	if i.config.SecretKey != "" {
+		env = append(env, "AWS_SECRET_ACCESS_KEY="+i.config.SecretKey)
+	}
+	if i.config.Region != "" {
+		env = append(env, "AWS_REGION="+i.config.Region)
+	}
+	if i.config.SessionToken != "" {
+		env = append(env, "AWS_SESSION_TOKEN="+i.config.SessionToken)
+	}
+	if i.config.ProfileName != "" {
+		env = append(env, "AWS_PROFILE="+i.config.ProfileName)
+	}
+
+	// Update the command's environment
+	i.cmd.Env = env
 
 	// Set up and start the process with logging
 	processName := fmt.Sprintf("Java-Iceberg:%d", i.port)
@@ -474,32 +472,12 @@ func (i *Iceberg) CloseIcebergClient() error {
 
 // getOrCreateBatch gets or creates a batch for a specific configuration
 func getOrCreateBatch(configHash string) *recordBatch {
-	// Try with a read lock first
-	registryRWMutex.RLock()
-	batch, exists := batchRegistry[configHash]
-	registryRWMutex.RUnlock()
-
-	if exists {
-		return batch
-	}
-
-	// Acquire write lock to create a new batch
-	registryRWMutex.Lock()
-	defer registryRWMutex.Unlock()
-
-	// Check again in case another goroutine created it
-	batch, exists = batchRegistry[configHash]
-	if exists {
-		return batch
-	}
-
-	// Create new batch
-	batch = &recordBatch{
+	// LoadOrStore returns the existing value if present, or stores and returns the new value
+	batch, _ := batchRegistry.LoadOrStore(configHash, &recordBatch{
 		records: make([]string, 0, 1000),
 		size:    0,
-	}
-	batchRegistry[configHash] = batch
-	return batch
+	})
+	return batch.(*recordBatch)
 }
 
 // getLocalBuffer gets or creates a local buffer for the current goroutine
@@ -632,13 +610,12 @@ func flushBatch(configHash string, client proto.RecordIngestServiceClient) error
 	}
 
 	// Now check if there's anything in the shared batch
-	registryRWMutex.RLock()
-	batch, exists := batchRegistry[configHash]
-	registryRWMutex.RUnlock()
-
+	batchVal, exists := batchRegistry.Load(configHash)
 	if !exists {
 		return nil // Nothing to flush
 	}
+
+	batch := batchVal.(*recordBatch)
 
 	// Lock the batch
 	batch.mu.Lock()

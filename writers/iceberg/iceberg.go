@@ -69,7 +69,6 @@ func (i *Iceberg) Write(_ context.Context, record types.RawRecord) error {
 }
 
 func (i *Iceberg) Close() error {
-
 	// Get the config hash for this writer instance to flush any remaining records
 	configHash := getConfigHash(i.stream.Namespace(), i.stream.ID(), i.backfill)
 

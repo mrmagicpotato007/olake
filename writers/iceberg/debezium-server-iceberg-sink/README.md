@@ -51,6 +51,7 @@ Set up the following configuration in your VSCode debug console:
     ]
 }
 ```
+> warehouse = path where data will be stored in s3.
 
 ### Functionality
 

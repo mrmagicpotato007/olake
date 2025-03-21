@@ -9,11 +9,7 @@ joined_arguments=""
 # Function to check and build the Java JAR file for iceberg if needed
 function check_and_build_jar() {
     local connector="$1"
-    
-    # Only do this for iceberg destination
-    if [[ "$connector" != "iceberg" ]]; then
-        return 0
-    fi
+
     
     echo "============================== Checking for Iceberg JAR file =============================="
     
@@ -39,8 +35,6 @@ function check_and_build_jar() {
     # Navigate to the Maven project directory
     if [ -d "writers/iceberg/debezium-server-iceberg-sink" ]; then
         cd writers/iceberg/debezium-server-iceberg-sink
-    elif [ -d "writers/iceberg" ]; then
-        cd writers/iceberg
     else
         fail "Cannot find Iceberg Maven project directory."
     fi

@@ -1,51 +1,51 @@
-# MongoDB Driver
+# Postgres Driver
 
-The MongoDB Driver enables data synchronization from MongoDB to your desired destination. It supports both **Full Refresh** and **CDC (Change Data Capture)** modes.
+The Postgres Driver enables data synchronization from Postgres to your desired destination. It supports both **Full Refresh** and **CDC (Change Data Capture)** modes.
 
 ---
 
 ## Supported Modes
 
 1. **Full Refresh**  
-   Fetches the complete dataset from MongoDB.
+   Fetches the complete dataset from Postgres.
 
 2. **CDC (Change Data Capture)**  
-   Tracks and syncs incremental changes from MongoDB in real time.
+   Tracks and syncs incremental changes from Postgres in real time.
 
 ---
 
 ## Setup and Configuration
 
-To run the MongoDB Driver, configure the following files with your specific credentials and settings:
+To run the Postgres Driver, configure the following files with your specific credentials and settings:
 
-- **`config.json`**: MongoDB connection details.  
+- **`config.json`**: postgres connection details.  
 - **`catalog.json`**: List of collections and fields to sync (generated using the *Discover* command).  
 - **`write.json`**: Configuration for the destination where the data will be written.
 
 Place these files in your project directory before running the commands.
 
 ### Config File 
-Add MongoDB credentials in following format in config.json file 
+Add Postgres credentials in following format in config.json file 
    ```json
    {
-      "hosts": [
-         "host1:27017",
-         "host2:27017",
-         "host3:27017"
-      ],
-      "username": "test",
-      "password": "test",
-      "authdb": "admin",
-      "replica-set": "rs0",
-      "read-preference": "secondaryPreferred",
-      "srv": false,
-      "server-ram": 16,
-      "database": "database",
-      "max_threads": 50,
-      "default_mode" : "cdc",
-      "backoff_retry_count": 2,
-      "partition_strategy":""
-   }
+    "host": "postgres-host",
+    "port": 5432,
+    "database": "postgres_db",
+    "username": "postgres_user",
+    "password": "postgres_pass",
+    "jdbc_url_params": {},
+    "ssl": {
+        "mode": "disable"
+    },
+    "update_method": { 
+        "replication_slot": "postgres_slot",
+        "intial_wait_time":10
+    },
+    "reader_batch_size": 100000,
+    "default_mode":"cdc",
+    "max_threads" :50,
+    "split_column":""
+  }
 ```
 
 ## Commands
@@ -57,7 +57,7 @@ The *Discover* command generates json content for `catalog.json` file, which def
 #### Usage
 To run the Discover command, use the following syntax
    ```bash
-   ./build.sh driver-mongodb discover --config /mongodb/examples/config.json 
+   ./build.sh driver-postgres discover --config /postgres/examples/config.json 
    ```
 
 #### Example Response (Formatted)
@@ -67,18 +67,19 @@ After executing the Discover command, a formatted response will look like this:
   "type": "CATALOG",
   "catalog": {
       "selected_streams": {
-         "namespace": [
+         "public": [
                {
                   "partition_regex": "",
-                  "stream_name": "incr"
+                  "stream_name": "table_1",
+                  "split_column":""
                }
          ]
       },
       "streams": [
          {
          "stream": {
-            "name": "tweets",
-            "namespace": "twitter_data",
+            "name": "table_1",
+            "namespace": "public",
             ...
          }
          }
@@ -93,6 +94,7 @@ Before running the Sync command, the generated `catalog.json` file must be confi
    Remove streams from selected streams.
 - Add Partition based on Column Value
    Modify partition_regex field to partition destination data based on column value
+- Add split column (primary key) based on which full load chunks can be created 
 
 - Modify Each Stream:<br>
    For each stream you want to sync:<br>
@@ -108,18 +110,19 @@ Before running the Sync command, the generated `catalog.json` file must be confi
    ```json
    {
       "selected_streams": {
-         "namespace": [
+         "public": [
                {
                   "partition_regex": "",
-                  "stream_name": "incr"
+                  "stream_name": "table_1",
+                  "split_column":""
                }
          ]
       },
       "streams": [
          {
             "stream": {
-               "name": "incr2",
-               "namespace": "incr",
+               "name": "table_1",
+               "namespace": "public",
                ...
                "sync_mode": "cdc"
             }
@@ -160,15 +163,15 @@ Example (For S3):
    ```
 ### Sync Command
 
-The *Sync* command fetches data from MongoDB and ingests it into the destination.
+The *Sync* command fetches data from Postgres and ingests it into the destination.
 
 ```bash
-./build.sh driver-mongodb sync --config /mongodb/examples/config.json --catalog /mongodb/examples/catalog.json --destination /mongodb/examples/write.json
+./build.sh driver-postgres sync --config /postgres/examples/config.json --catalog /postgres/examples/catalog.json --destination /postgres/examples/write.json
 ```
 
 To run sync with state 
 ```bash
-./build.sh driver-mongodb sync --config /mongodb/examples/config.json --catalog /mongodb/examples/catalog.json --destination /mongodb/examples/write.json --state /mongodb/examples/state.json
+./build.sh driver-postgres sync --config /postgres/examples/config.json --catalog /postgres/examples/catalog.json --destination /postgres/examples/write.json --state /postgres/examples/state.json
 ```
 
 
@@ -178,26 +181,33 @@ The State file is generated by the CLI command at the completion of a batch or t
 You can save the state in a `state.json` file using the following format:
 ```json
 {
-    "type": "STREAM",
+    "type": "GLOBAL",
+    "global": {
+        "state": {
+            "lsn": "2D9/AD00445A"
+        },
+        "streams": [
+            "public.table_1",
+            "public.table_2"
+        ]
+    },
     "streams": [
         {
-            "stream":"stream_8",
-            "namespace":"otter_db",
-            "sync_mode":"cdc",
+            "stream": "table_1",
+            "namespace": "public",
+            "sync_mode": "",
             "state": {
-                "resume_token": {"_data": "82673F82FE000000022B0429296E1404"}
+                "chunks": []
             }
         },
         {
-            "stream":"stream_0",
-            "namespace":"otter_db",
-            "sync_mode":"cdc",
+            "stream": "table_2",
+            "namespace": "public",
+            "sync_mode": "",
             "state": {
-                "resume_token": {"_data": "82673F82FE000000022B0429296E1404"}
+                "chunks": []
             }
         }
     ]
 }
 ```
-
-For more information, refer to [MongoDB Connector Docs](https://olake.io/docs/connectors/mongodb/overview)

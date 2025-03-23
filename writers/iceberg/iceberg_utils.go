@@ -61,9 +61,9 @@ func getGoroutineID() string {
 // batchRegistry tracks batches of records per server configuration
 var (
 	// Maximum batch size before flushing (256MB in bytes)
-	maxBatchSize int64 = 256 * 1024 * 1024
+	maxBatchSize int64 = 1024 * 1024 * 1024
 	// Local buffer threshold before pushing to shared batch (5MB)
-	localBufferThreshold int64 = 5 * 1024 * 1024
+	localBufferThreshold int64 = 100 * 1024 * 1024
 	// Thread-local buffer cache using sync.Map to avoid locks
 	// Key is configHash + goroutine ID, value is *LocalBuffer
 	localBuffers sync.Map
@@ -680,9 +680,8 @@ func sendRecords(records []string, client proto.RecordIngestServiceClient) error
 		return fmt.Errorf("failed to send batch: %v", err)
 	}
 
-	logger.Infof("Sent batch to Iceberg server: %d records, %.2f MB, response: %s",
-		len(records),
-		float64(len(records)*200)/(1024*1024),
+	logger.Infof("Sent batch to Iceberg server: %d records, response: %s",
+		len(validRecords),
 		res.GetResult())
 
 	return nil

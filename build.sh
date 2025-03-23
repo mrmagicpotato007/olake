@@ -1,3 +1,5 @@
+#!/bin/bash
+
 function fail() {
     local error="${*:-Unknown error}"
     echo "$(chalk red "${error}")"

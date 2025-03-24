@@ -46,7 +46,7 @@ func NewConnection(_ context.Context, config *Config, pos mysql.Position) (*Conn
 	}, nil
 }
 
-func (c *Connection) StreamMessages(ctx context.Context, filter ChangeFilter, callback OnChange, getMasterPos func() (mysql.Position, error)) error {
+func (c *Connection) StreamMessages(ctx context.Context, filter ChangeFilter, callback OnChange) error {
 	c.idleStartTime = time.Now()
 	for {
 		select {

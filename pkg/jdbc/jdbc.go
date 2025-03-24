@@ -153,7 +153,11 @@ func WithIsolation(ctx context.Context, client *sql.DB, fn func(tx *sql.Tx) erro
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rerr := tx.Rollback(); rerr != nil && rerr != sql.ErrTxDone {
+			fmt.Printf("transaction rollback failed: %v\n", rerr)
+		}
+	}()
 	if err := fn(tx); err != nil {
 		return err
 	}

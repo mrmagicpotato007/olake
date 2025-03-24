@@ -137,8 +137,6 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		gs.State.Position = change.Position
 		m.State.SetGlobalState(gs)
 		return nil
-	}, func() (mysql.Position, error) {
-		return m.getCurrentBinlogPosition()
 	})
 }
 

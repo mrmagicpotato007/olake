@@ -19,6 +19,29 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// determineMaxBatchSize returns appropriate batch size based on system memory
+// This is assuming that each core might create 2 threads, which might eventually need 4 writer threads
+func determineMaxBatchSize() int64 {
+
+	ramGB := utils.DetermineSystemMemoryGB()
+
+	var batchSize int64
+
+	switch {
+	case ramGB <= 8:
+		batchSize = 200 * 1024 * 1024 // 200MB
+	case ramGB <= 16:
+		batchSize = 400 * 1024 * 1024 // 400MB
+	case ramGB <= 32:
+		batchSize = 800 * 1024 * 1024 // 800MB
+	default:
+		batchSize = 1600 * 1024 * 1024 // 1600MB
+	}
+
+	logger.Infof("System has %dGB RAM, setting iceberg writer batch size to %d bytes", ramGB, batchSize)
+	return batchSize
+}
+
 // portMap tracks which ports are in use
 var portMap sync.Map
 
@@ -60,10 +83,10 @@ func getGoroutineID() string {
 
 // batchRegistry tracks batches of records per server configuration
 var (
-	// Maximum batch size before flushing (256MB in bytes)
-	maxBatchSize int64 = 1024 * 1024 * 1024
+	// Maximum batch size before flushing (dynamically set based on system memory)
+	maxBatchSize int64 = determineMaxBatchSize()
 	// Local buffer threshold before pushing to shared batch (5MB)
-	localBufferThreshold int64 = 100 * 1024 * 1024
+	localBufferThreshold int64 = 50 * 1024 * 1024
 	// Thread-local buffer cache using sync.Map to avoid locks
 	// Key is configHash + goroutine ID, value is *LocalBuffer
 	localBuffers sync.Map

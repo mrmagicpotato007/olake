@@ -88,7 +88,6 @@ func (c *Connection) StreamMessages(ctx context.Context, filter ChangeFilter, ca
 				}); err != nil {
 					return err
 				}
-
 			}
 		}
 	}

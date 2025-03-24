@@ -56,6 +56,10 @@ For any questions, concerns, or queries, you can start by asking a question on o
 
 ### We look forward to your feedback on improving this project!
 
+### Related Link
+1. [Guidelines for creating a PR](https://olake.io/docs/community/issues-and-prs)
+2. [How to Contribute](https://olake.io/docs/community/contributing)
+
 
 <!----variables---->
 

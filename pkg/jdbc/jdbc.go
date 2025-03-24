@@ -71,7 +71,6 @@ func PostgresMinQuery(stream protocol.Stream, filterColumn string, filterValue i
 func PostgresChunkScanQuery(stream protocol.Stream, filterColumn string, chunk types.Chunk) string {
 	condition := buildChunkCondition(filterColumn, chunk)
 	return fmt.Sprintf(`SELECT * FROM "%s"."%s" WHERE %s`, stream.Namespace(), stream.Name(), condition)
-
 }
 
 // MySQL-Specific Queries

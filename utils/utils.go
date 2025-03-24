@@ -283,9 +283,8 @@ func CompareInterfaceValue(a, b interface{}) int {
 	case string:
 		if a != nil && b != nil {
 			return strings.Compare(a.(string), b.(string))
-		} else {
-			return Ternary(a == nil, -1, 1).(int)
 		}
+		return Ternary(a == nil, -1, 1).(int)
 	}
 	return 0
 }

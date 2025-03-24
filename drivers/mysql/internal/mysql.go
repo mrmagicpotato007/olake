@@ -25,8 +25,9 @@ const (
 // MySQL represents the MySQL database driver
 type MySQL struct {
 	*base.Driver
-	config *Config
-	client *sql.DB
+	config    *Config
+	client    *sql.DB
+	cdcConfig CDC
 }
 
 func (m *MySQL) StateType() types.StateType {
@@ -67,7 +68,19 @@ func (m *MySQL) Setup() error {
 	if err := client.PingContext(ctx); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
-
+	found, _ := utils.IsOfType(m.config.UpdateMethod, "intial_wait_time")
+	if found {
+		logger.Info("Found CDC Configuration")
+		cdc := &CDC{}
+		if err := utils.Unmarshal(m.config.UpdateMethod, cdc); err != nil {
+			return err
+		}
+		if cdc.InitialWaitTime == 0 {
+			// default set 10 sec
+			cdc.InitialWaitTime = 10
+		}
+		m.cdcConfig = *cdc
+	}
 	m.client = client
 	// Enable CDC support if binlog is configured
 	//TODO : check for mysql binlog permisssions

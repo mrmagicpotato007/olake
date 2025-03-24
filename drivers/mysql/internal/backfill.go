@@ -27,7 +27,12 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 		return fmt.Errorf("failed to get approx row count: %s", err)
 	}
 	pool.AddRecordsToSync(approxRowCount)
-
+	// Get primary key column
+	pkColumns := stream.GetStream().SourceDefinedPrimaryKey
+	if pkColumns.Len() == 0 {
+		return fmt.Errorf("no primary key defined for stream %s", stream.Name())
+	}
+	pkColumn := pkColumns.Array()[0]
 	// Get chunks from state or calculate new ones
 	stateChunks := m.State.GetChunks(stream.Self())
 	var splitChunks []types.Chunk
@@ -52,13 +57,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 	// Process chunks concurrently
 	processChunk := func(ctx context.Context, chunk types.Chunk, number int) (err error) {
 		// Begin transaction with repeatable read isolation
-		return m.withIsolation(backfillCtx, func(tx *sql.Tx) error {
-			// Get primary key column
-			pkColumn := getPrimaryKeyColumn(m.client, stream.Name())
-			if pkColumn == "" {
-				return fmt.Errorf("no primary key found for stream %s", stream.ID())
-			}
-
+		return jdbc.WithIsolation(backfillCtx, m.client, func(tx *sql.Tx) error {
 			// Build query for the chunk
 			stmt := jdbc.ChunkDataQuery(stream, pkColumn)
 			setter := jdbc.NewReader(backfillCtx, stmt, 0, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -94,6 +93,7 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 				if err != nil {
 					return fmt.Errorf("failed to mapScan record data: %s", err)
 				}
+				// TODO : create hash from all keys if primary key not present
 				//genrate olake id
 				olakeID := utils.GetKeysHash(record, stream.GetStream().SourceDefinedPrimaryKey.Array()...)
 				//insert record
@@ -110,13 +110,9 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 }
 
 func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.Chunk]) error {
-	return m.withIsolation(context.Background(), func(tx *sql.Tx) error {
+	return jdbc.WithIsolation(context.Background(), m.client, func(tx *sql.Tx) error {
 		// Get primary key column using the provided function
-		pkColumn := getPrimaryKeyColumn(m.client, stream.Name())
-		if pkColumn == "" {
-			return fmt.Errorf("no primary key found for stream %s", stream.ID())
-		}
-
+		pkColumn := stream.GetStream().SourceDefinedPrimaryKey.Array()[0]
 		// Get table extremes
 		minVal, maxVal, err := m.getTableExtremes(stream, pkColumn, tx)
 		if err != nil {
@@ -205,19 +201,4 @@ func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 		return 0, fmt.Errorf("failed to get estimated records count:%v", err)
 	}
 	return totalRecords / (m.config.MaxThreads * 8), nil
-}
-
-func (m *MySQL) withIsolation(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := m.client.BeginTx(ctx, &sql.TxOptions{
-		Isolation: sql.LevelRepeatableRead,
-		ReadOnly:  true,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }

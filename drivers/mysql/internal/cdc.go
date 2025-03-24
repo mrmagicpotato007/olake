@@ -14,6 +14,25 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
+func (m *MySQL) prepareBinlogConfig(serverID uint32, _ ...protocol.Stream) (*binlog.Config, error) {
+	if !m.CDCSupport {
+		return nil, fmt.Errorf("invalid call; %s not running in CDC mode", m.Type())
+	}
+
+	return &binlog.Config{
+		ServerID:        serverID,
+		Flavor:          "mysql",
+		Host:            m.config.Host,
+		Port:            uint16(m.config.Port),
+		User:            m.config.Username,
+		Password:        m.config.Password,
+		Charset:         "utf8mb4",
+		VerifyChecksum:  true,
+		HeartbeatPeriod: 30 * time.Second,
+		InitialWaitTime: time.Duration(m.cdcConfig.InitialWaitTime) * time.Second,
+	}, nil
+}
+
 // MySQLGlobalState tracks the binlog position and backfilled streams.
 type MySQLGlobalState struct {
 	ServerID uint32             `json:"server_id"`
@@ -52,6 +71,10 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		m.State.SetGlobalState(gs)
 	}
 
+	config, err := m.prepareBinlogConfig(gs.ServerID, streams...)
+	if err != nil {
+		return fmt.Errorf("failed to prepare binlog config: %s", err)
+	}
 	// Backfill streams that haven't been processed yet
 	var needsBackfill []protocol.Stream
 	for _, s := range streams {
@@ -59,17 +82,16 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 			needsBackfill = append(needsBackfill, s)
 		}
 	}
-	if len(needsBackfill) > 0 {
-		if err := utils.Concurrent(ctx, needsBackfill, len(needsBackfill), func(_ context.Context, s protocol.Stream, _ int) error {
-			if err := m.backfill(pool, s); err != nil {
-				return fmt.Errorf("failed backfill of stream[%s]: %s", s.ID(), err)
-			}
-			gs.Streams.Insert(s.ID())
-			m.State.SetGlobalState(gs)
-			return nil
-		}); err != nil {
-			return fmt.Errorf("failed concurrent backfill: %s", err)
+
+	if err := utils.Concurrent(ctx, needsBackfill, len(needsBackfill), func(_ context.Context, s protocol.Stream, _ int) error {
+		if err := m.backfill(pool, s); err != nil {
+			return fmt.Errorf("failed backfill of stream[%s]: %s", s.ID(), err)
 		}
+		gs.Streams.Insert(s.ID())
+		m.State.SetGlobalState(gs)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed concurrent backfill: %s", err)
 	}
 
 	// Set up inserters for each stream
@@ -87,19 +109,6 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		}
 	}()
 
-	// Configure binlog connection
-	config := &binlog.Config{
-		ServerID:        gs.ServerID,
-		Flavor:          "mysql",
-		Host:            m.config.Host,
-		Port:            uint16(m.config.Port),
-		User:            m.config.Username,
-		Password:        m.config.Password,
-		Charset:         "utf8mb4",
-		VerifyChecksum:  true,
-		HeartbeatPeriod: 30 * time.Second,
-	}
-
 	// Start binlog connection
 	conn, err := binlog.NewConnection(ctx, config, gs.State.Position)
 	if err != nil {
@@ -109,10 +118,6 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 
 	// Create change filter for all streams
 	filter := binlog.NewChangeFilter(streams...)
-	// Callback to get master’s binlog position
-	getMasterPos := func() (mysql.Position, error) {
-		return m.getCurrentBinlogPosition()
-	}
 	// Stream and process events
 	logger.Infof("Starting MySQL CDC from binlog position %s:%d", gs.State.Position.Name, gs.State.Position.Pos)
 	return conn.StreamMessages(ctx, filter, func(change binlog.CDCChange) error {
@@ -132,7 +137,9 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		gs.State.Position = change.Position
 		m.State.SetGlobalState(gs)
 		return nil
-	}, getMasterPos)
+	}, func() (mysql.Position, error) {
+		return m.getCurrentBinlogPosition()
+	})
 }
 
 // getCurrentBinlogPosition retrieves the current binlog position from MySQL.

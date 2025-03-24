@@ -1,6 +1,8 @@
 package jdbc
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/datazip-inc/olake/protocol"
@@ -142,4 +144,18 @@ func MySQLTableColumnsQuery() string {
 		WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? 
 		ORDER BY ORDINAL_POSITION
 	`
+}
+func WithIsolation(ctx context.Context, client *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := client.BeginTx(ctx, &sql.TxOptions{
+		Isolation: sql.LevelRepeatableRead,
+		ReadOnly:  true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

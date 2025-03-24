@@ -18,6 +18,7 @@ type Config struct {
 	Charset         string
 	VerifyChecksum  bool
 	HeartbeatPeriod time.Duration
+	InitialWaitTime time.Duration
 }
 
 // BinlogState holds the current binlog position.
@@ -38,4 +39,3 @@ type CDCChange struct {
 
 // OnChange is a callback function type for processing CDC changes.
 type OnChange func(change CDCChange) error
-type MasterPositionFunc func() (mysql.Position, error)

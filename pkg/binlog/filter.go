@@ -1,9 +1,9 @@
 package binlog
 
 import (
+	"fmt"
 	"time"
 
-	"github.com/datazip-inc/olake/logger"
 	"github.com/datazip-inc/olake/protocol"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
@@ -20,7 +20,7 @@ func NewChangeFilter(streams ...protocol.Stream) ChangeFilter {
 		streams: make(map[string]protocol.Stream),
 	}
 	for _, stream := range streams {
-		filter.streams[stream.Namespace()+"."+stream.Name()] = stream
+		filter.streams[fmt.Sprintf("%s.%s", stream.Namespace(), stream.Name())] = stream
 	}
 	return filter
 }
@@ -56,7 +56,10 @@ func (f ChangeFilter) FilterRowsEvent(e *replication.RowsEvent, ev *replication.
 	}
 
 	for _, row := range rowsToProcess {
-		record := convertRowToMap(row, e.Table.ColumnNameString())
+		record, err := convertRowToMap(row, e.Table.ColumnNameString())
+		if err != nil {
+			return err
+		}
 		if record == nil {
 			continue
 		}
@@ -79,14 +82,13 @@ func (f ChangeFilter) FilterRowsEvent(e *replication.RowsEvent, ev *replication.
 }
 
 // convertRowToMap converts a binlog row to a map.
-func convertRowToMap(row []interface{}, columns []string) map[string]interface{} {
+func convertRowToMap(row []interface{}, columns []string) (map[string]interface{}, error) {
 	if len(columns) != len(row) {
-		logger.Errorf("Column count mismatch: expected %d, got %d", len(columns), len(row))
-		return nil
+		return nil, fmt.Errorf("column count mismatch: expected %d, got %d", len(columns), len(row))
 	}
 	record := make(map[string]interface{})
 	for i, val := range row {
 		record[columns[i]] = val
 	}
-	return record
+	return record, nil
 }

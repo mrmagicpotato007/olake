@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/datazip-inc/olake/drivers/base"
 	"github.com/datazip-inc/olake/types"
 	"github.com/datazip-inc/olake/utils"
 )
@@ -17,9 +18,13 @@ type Config struct {
 	Database      string         `json:"database"`
 	Port          int            `json:"port"`
 	TLSSkipVerify bool           `json:"tls_skip_verify"` // Add this field
+	UpdateMethod  interface{}    `json:"update_method"`
 	DefaultMode   types.SyncMode `json:"default_mode"`
 	MaxThreads    int            `json:"max_threads"`
 	RetryCount    int            `json:"backoff_retry_count"`
+}
+type CDC struct {
+	InitialWaitTime int `json:"intial_wait_time"`
 }
 
 // URI generates the connection URI for the MySQL database
@@ -47,11 +52,6 @@ func (c *Config) URI() string {
 
 // Validate checks the configuration for any missing or invalid fields
 func (c *Config) Validate() error {
-	// Validate hosts
-	if len(c.Host) == 0 {
-		return fmt.Errorf("at least one host is required")
-	}
-
 	if c.Host == "" {
 		return fmt.Errorf("empty host name")
 	} else if strings.Contains(c.Host, "https") || strings.Contains(c.Host, "http") {
@@ -83,7 +83,7 @@ func (c *Config) Validate() error {
 
 	// Set default retry count if not provided
 	if c.RetryCount <= 0 {
-		c.RetryCount = 3 // Reasonable default for retries
+		c.RetryCount = base.DefaultRetryCount // Reasonable default for retries
 	}
 
 	return utils.Validate(c)

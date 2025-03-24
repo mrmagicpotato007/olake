@@ -7,6 +7,8 @@ import (
 	"github.com/datazip-inc/olake/types"
 )
 
+const DefaultRetryCount = 3
+
 type Driver struct {
 	cachedStreams sync.Map // locally cached streams; It contains all streams
 	CDCSupport    bool     // Used in CDC mode

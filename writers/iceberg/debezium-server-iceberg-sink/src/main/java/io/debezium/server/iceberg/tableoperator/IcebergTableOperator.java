@@ -185,10 +185,12 @@ public class IcebergTableOperator {
       // if field additions not enabled add set of events to table
       addToTablePerSchema(icebergTable, events);
     } else {
+      
       Map<RecordConverter.SchemaConverter, List<RecordConverter>> eventsGroupedBySchema =
-          events.stream()
+          events.parallelStream()
               .collect(Collectors.groupingBy(RecordConverter::schemaConverter));
-      LOGGER.debug("Batch got {} records with {} different schema!!", events.size(), eventsGroupedBySchema.keySet().size());
+      
+      LOGGER.info("Batch got {} records with {} different schema!!", events.size(), eventsGroupedBySchema.keySet().size());
 
       for (Map.Entry<RecordConverter.SchemaConverter, List<RecordConverter>> schemaEvents : eventsGroupedBySchema.entrySet()) {
         // extend table schema if new fields found
@@ -214,11 +216,16 @@ public class IcebergTableOperator {
     try {
       
       // Write all events
-      for (RecordConverter e : events) {
-        final RecordWrapper record = (upsert && !icebergTable.schema().identifierFieldIds().isEmpty()) 
-            ? e.convert(icebergTable.schema(), cdcOpField) 
-            : e.convertAsAppend(icebergTable.schema());
-        writer.write(record);
+      // Parallelize the conversion step, then collect and write sequentially for thread safety
+      List<RecordWrapper> convertedRecords = events.parallelStream()
+          .map(e -> (upsert && !icebergTable.schema().identifierFieldIds().isEmpty())
+              ? e.convert(icebergTable.schema(), cdcOpField)
+              : e.convertAsAppend(icebergTable.schema()))
+          .collect(Collectors.toList());
+          
+      // Write converted records sequentially to maintain thread safety with the writer
+      for (RecordWrapper record : convertedRecords) {
+          writer.write(record);
       }
 
       WriteResult files = writer.complete();

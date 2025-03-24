@@ -56,34 +56,32 @@ func (m *MySQL) backfill(pool *protocol.WriterPool, stream protocol.Stream) erro
 
 	// Process chunks concurrently
 	processChunk := func(ctx context.Context, chunk types.Chunk, number int) (err error) {
+		// Track batch start time for logging
+		batchStartTime := time.Now()
+		waitChannel := make(chan error, 1)
+		insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
+		if err != nil {
+			return fmt.Errorf("failed to create writer thread: %s", err)
+		}
+		defer func() {
+			insert.Close()
+			if err == nil {
+				// Wait for chunk completion
+				err = <-waitChannel
+			}
+			// Log completion and update state if successful
+			if err == nil {
+				logger.Infof("chunk[%d] with min[%v]-max[%v] completed in %0.2f seconds", number, chunk.Min, chunk.Max, time.Since(batchStartTime).Seconds())
+				m.State.RemoveChunk(stream.Self(), chunk)
+			}
+		}()
 		// Begin transaction with repeatable read isolation
 		return jdbc.WithIsolation(backfillCtx, m.client, func(tx *sql.Tx) error {
 			// Build query for the chunk
-			stmt := jdbc.ChunkDataQuery(stream, pkColumn)
+			stmt := jdbc.MysqlChunkDataQuery(stream, pkColumn)
 			setter := jdbc.NewReader(backfillCtx, stmt, 0, func(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 				return tx.QueryContext(ctx, query, args...)
 			}, chunk.Min, chunk.Max)
-
-			// Track batch start time for logging
-			batchStartTime := time.Now()
-			waitChannel := make(chan error, 1)
-			insert, err := pool.NewThread(backfillCtx, stream, protocol.WithErrorChannel(waitChannel))
-			if err != nil {
-				return fmt.Errorf("failed to create writer thread: %s", err)
-			}
-			defer func() {
-				insert.Close()
-				if err == nil {
-					// Wait for chunk completion
-					err = <-waitChannel
-				}
-				// Log completion and update state if successful
-				if err == nil {
-					logger.Infof("chunk[%d] with min[%v]-max[%v] completed in %0.2f seconds", number, chunk.Min, chunk.Max, time.Since(batchStartTime).Seconds())
-					m.State.RemoveChunk(stream.Self(), chunk)
-				}
-			}()
-
 			// Capture and process rows
 			return setter.Capture(func(rows *sql.Rows) error {
 				//crrate a map to hold column names and values
@@ -120,7 +118,7 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 		}
 		chunks.Insert(types.Chunk{
 			Min: "",
-			Max: convertToString(minVal),
+			Max: fmt.Sprintf("%v", minVal),
 		})
 
 		logger.Infof("Stream %s extremes - min: %v, max: %v", stream.ID(), minVal, maxVal)
@@ -141,14 +139,14 @@ func (m *MySQL) calculateChunks(stream protocol.Stream, chunks *types.Set[types.
 			if err != nil || nextValRaw == nil {
 				// Add final chunk
 				chunks.Insert(types.Chunk{
-					Min: convertToString(currentVal),
-					Max: convertToString(maxVal),
+					Min: fmt.Sprintf("%v", currentVal),
+					Max: fmt.Sprintf("%v", maxVal),
 				})
 				break
 			}
-			nextVal := convertToString(nextValRaw)
+			nextVal := fmt.Sprintf("%v", nextValRaw)
 			chunks.Insert(types.Chunk{
-				Min: convertToString(currentVal),
+				Min: fmt.Sprintf("%v", currentVal),
 				Max: nextVal,
 			})
 			currentVal = nextVal
@@ -164,35 +162,8 @@ func (m *MySQL) getTableExtremes(stream protocol.Stream, pkColumn string, tx *sq
 	if err != nil {
 		return "", "", err
 	}
-	return convertToString(min), convertToString(max), err
+	return fmt.Sprintf("%v", min), fmt.Sprintf("%v", max), err
 }
-
-// Helper function to convert MySQL results to string
-func convertToString(value interface{}) string {
-	switch v := value.(type) {
-	case []byte:
-		return string(v) // Convert byte slice to string
-	case string:
-		return v // Already a string
-	default:
-		return fmt.Sprintf("%v", v) // Fallback
-	}
-}
-
-func getPrimaryKeyColumn(db *sql.DB, table string) string {
-	query := jdbc.MySQLPrimaryKeyQuery()
-	var pkColumn string
-	err := db.QueryRow(query, table).Scan(&pkColumn)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return ""
-		}
-		logger.Errorf("Error getting primary key for table %s: %v", table, err)
-		return ""
-	}
-	return pkColumn
-}
-
 func (m *MySQL) calculateChunksSize(stream protocol.Stream) (int, error) {
 	var totalRecords int
 	query := jdbc.MySQLTableRowsQuery()

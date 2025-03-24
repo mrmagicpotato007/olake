@@ -14,7 +14,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 )
 
-func (m *MySQL) prepareBinlogConfig(serverID uint32, _ ...protocol.Stream) (*binlog.Config, error) {
+func (m *MySQL) prepareBinlogConfig(serverID uint32) (*binlog.Config, error) {
 	if !m.CDCSupport {
 		return nil, fmt.Errorf("invalid call; %s not running in CDC mode", m.Type())
 	}
@@ -41,7 +41,7 @@ type MySQLGlobalState struct {
 }
 
 // RunChangeStream implements the CDC functionality for multiple streams using a single binlog connection.
-func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) error {
+func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.Stream) (err error) {
 	ctx := context.TODO()
 
 	// Load or initialize global state
@@ -50,7 +50,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		Streams: types.NewSet[string](),
 	}
 	if m.State.Global != nil {
-		if err := utils.Unmarshal(m.State.Global, gs); err != nil {
+		if err = utils.Unmarshal(m.State.Global, gs); err != nil {
 			return fmt.Errorf("failed to unmarshal global state: %s", err)
 		}
 	}
@@ -71,7 +71,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		m.State.SetGlobalState(gs)
 	}
 
-	config, err := m.prepareBinlogConfig(gs.ServerID, streams...)
+	config, err := m.prepareBinlogConfig(gs.ServerID)
 	if err != nil {
 		return fmt.Errorf("failed to prepare binlog config: %s", err)
 	}
@@ -96,16 +96,24 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 
 	// Set up inserters for each stream
 	inserters := make(map[protocol.Stream]*protocol.ThreadEvent)
+	errChans := make(map[protocol.Stream]chan error)
 	for _, stream := range streams {
-		insert, err := pool.NewThread(ctx, stream)
+		errChan := make(chan error)
+		inserter, err := pool.NewThread(ctx, stream, protocol.WithErrorChannel(errChan))
 		if err != nil {
 			return fmt.Errorf("failed to create writer thread for stream[%s]: %s", stream.ID(), err)
 		}
-		inserters[stream] = insert
+		inserters[stream], errChans[stream] = inserter, errChan
 	}
 	defer func() {
-		for _, insert := range inserters {
-			insert.Close()
+		if err == nil {
+			for stream, insert := range inserters {
+				insert.Close()
+				if threadErr := <-errChans[stream]; threadErr != nil {
+					err = fmt.Errorf("failed to write record for stream[%s]: %s", stream.ID(), threadErr)
+				}
+			}
+			m.State.SetGlobalState(gs)
 		}
 	}()
 
@@ -123,7 +131,7 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 	return conn.StreamMessages(ctx, filter, func(change binlog.CDCChange) error {
 		stream := change.Stream
 		insert := inserters[stream]
-		pkColumn := getPrimaryKeyColumn(m.client, change.Table)
+		pkColumn := stream.GetStream().SourceDefinedPrimaryKey.Array()[0]
 		deleteTS := utils.Ternary(change.Kind == "delete", change.Timestamp.UnixMilli(), int64(0)).(int64)
 		record := types.CreateRawRecord(
 			utils.GetKeysHash(change.Data, pkColumn),
@@ -135,7 +143,6 @@ func (m *MySQL) RunChangeStream(pool *protocol.WriterPool, streams ...protocol.S
 		}
 		// Update global state with the new position
 		gs.State.Position = change.Position
-		m.State.SetGlobalState(gs)
 		return nil
 	})
 }

@@ -55,7 +55,7 @@ func (c *Connection) StreamMessages(ctx context.Context, filter ChangeFilter, ca
 		default:
 			// Check if we’ve been idle too long
 			if time.Since(c.idleStartTime) > c.initialWaitTime {
-				logger.Debug("Idle timeout reached, checking master position")
+				logger.Debug("Idle timeout reached, exiting bin syncer")
 				return nil
 			}
 

@@ -20,7 +20,7 @@ func NextChunkEndQuery(stream protocol.Stream, column string, chunkSize int) str
 }
 
 // ChunkDataQuery returns the query to fetch data for a specific chunk
-func ChunkDataQuery(stream protocol.Stream, column string) string {
+func MysqlChunkDataQuery(stream protocol.Stream, column string) string {
 	return fmt.Sprintf(`SELECT * FROM %s.%s WHERE %s > ? AND %s <= ? ORDER BY %s`, stream.Namespace(), stream.Name(), column, column, column)
 }
 
